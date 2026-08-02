@@ -107,6 +107,52 @@ docker compose down
 `init.sql`은 named volume이 처음 생성될 때만 실행됩니다. `docker compose down -v`는 DB 데이터를
 담은 volume까지 삭제하므로 데이터 초기화가 명확히 필요한 경우가 아니면 사용하지 마세요.
 
+## Neo4j
+
+Neo4j Community Edition은 PostgreSQL과 같은 Compose 구성으로 실행됩니다. `.env`에 다음 항목을 추가합니다. 
+Community Edition Docker 이미지의 초기 사용자명은 `neo4j`로
+고정되므로 `NEO4J_USERNAME`은 변경하지 않습니다.
+
+```dotenv
+NEO4J_URI=neo4j://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=repomind_neo4j_dev_password
+NEO4J_HTTP_PORT=7474
+NEO4J_BOLT_PORT=7687
+```
+
+PostgreSQL과 Neo4j를 함께 실행하고 상태를 확인합니다.
+
+```bash
+docker compose up -d
+docker compose ps
+```
+
+Neo4j 로그만 확인하려면 다음 명령을 사용합니다.
+
+```bash
+docker compose logs -f neo4j
+```
+
+브라우저에서 [Neo4j Browser](http://localhost:7474)에 접속하고 `.env`의 사용자명과 비밀번호로
+로그인합니다. Bolt 연결 주소는 `neo4j://localhost:7687`입니다.
+
+Flask 설정과 Python 드라이버로 연결을 확인합니다.
+
+```bash
+python - <<'PY'
+from app import create_app
+from app.clients.neo4j import Neo4jClient
+
+app = create_app()
+with Neo4jClient.from_config(app.config) as client:
+    client.verify_connectivity()
+print("Neo4j connection: OK")
+PY
+```
+
+위 연결 확인은 그래프나 데이터를 생성하지 않습니다.
+
 ## Azure OpenAI 임베딩
 
 회사에서 제공한 Azure OpenAI 리소스 정보를 `.env`에 설정합니다. 실제 값과 API key는 커밋하거나
@@ -171,7 +217,8 @@ flask --app wsgi db upgrade
 │   │   ├── embeddings.py     # 임베딩 테스트 API
 │   │   └── health.py         # Health Check API
 │   ├── clients/
-│   │   └── azure_openai.py   # Azure OpenAI 클라이언트 팩토리
+│   │   ├── azure_openai.py   # Azure OpenAI 클라이언트 팩토리
+│   │   └── neo4j.py          # Neo4j 드라이버 및 연결 확인
 │   ├── services/
 │   │   └── embedding.py      # 임베딩 서비스
 │   ├── __init__.py           # Application Factory
@@ -191,5 +238,5 @@ flask --app wsgi db upgrade
 └── wsgi.py
 ```
 
-PostgreSQL 테이블과 SQLAlchemy 모델, Neo4j 및 Tree-sitter 연동과 비즈니스 로직은 아직 포함하지
-않습니다.
+PostgreSQL 테이블과 SQLAlchemy 모델, Neo4j 그래프 모델·쿼리·Repository·Service, Tree-sitter
+연동 및 비즈니스 로직은 아직 포함하지 않습니다.
