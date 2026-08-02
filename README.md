@@ -36,6 +36,38 @@ flask --app wsgi run --debug
 pip install -e '.[dev,postgres]'
 ```
 
+## Azure OpenAI 임베딩
+
+회사에서 제공한 Azure OpenAI 리소스 정보를 `.env`에 설정합니다. 실제 값과 API key는 커밋하거나
+로그에 출력하지 않습니다.
+
+```dotenv
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your-api-key
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=shared-embedding
+```
+
+테스트 API는 전체 벡터를 노출하지 않고 차원과 처음 세 값만 반환합니다.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/embeddings/test \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"예약 취소 처리 흐름을 분석합니다."}'
+```
+
+```json
+{
+  "dimension": 1536,
+  "embeddingPreview": [0.01, -0.02, 0.03]
+}
+```
+
+Azure 호출 없이 mock 테스트만 실행하려면 다음 명령을 사용합니다.
+
+```bash
+pytest tests/test_embedding_service.py tests/test_embeddings_api.py
+```
+
 ## 개발 명령어
 
 ```bash
@@ -65,7 +97,12 @@ flask --app wsgi db upgrade
 ├── app/
 │   ├── api/
 │   │   ├── __init__.py       # /api/v1 Blueprint 구성
+│   │   ├── embeddings.py     # 임베딩 테스트 API
 │   │   └── health.py         # Health Check API
+│   ├── clients/
+│   │   └── azure_openai.py   # Azure OpenAI 클라이언트 팩토리
+│   ├── services/
+│   │   └── embedding.py      # 임베딩 서비스
 │   ├── __init__.py           # Application Factory
 │   ├── config.py             # 환경별 설정
 │   ├── errors.py             # 공통 예외 및 처리기

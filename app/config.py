@@ -14,6 +14,9 @@ class BaseConfig:
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///repomind.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JSON_SORT_KEYS = False
+    AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
 
 
 class DevelopmentConfig(BaseConfig):
