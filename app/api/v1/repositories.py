@@ -1,14 +1,13 @@
 """Repository management API endpoints."""
 
-import uuid
 from flask import Blueprint, jsonify, request
 from dataclasses import asdict
 
-from app.dtos.repositories import (
-    RepositoryCreateRequest,
-    RepositoryStatusResponse,
-    RepositoryInfo,
-    RepositoryListResponse,
+from app.dtos.repositories import RepositoryCreateRequest
+from app.sample.mock_repositories import (
+    get_mock_repository_creation_status,
+    get_mock_repository_status,
+    get_mock_repository_list,
 )
 
 repositories_bp = Blueprint("repositories", __name__)
@@ -31,14 +30,7 @@ def create_repository():
     )
     
     # TODO: 실제 GitHub 연동 및 백그라운드 파이프라인 트리거 로직 추가 예정
-    mock_repo_id = f"repo_{uuid.uuid4().hex[:8]}"
-    
-    response_data = RepositoryStatusResponse(
-        repo_id=mock_repo_id,
-        status="indexing",
-        progress_percent=15,
-        file_count=0
-    )
+    response_data = get_mock_repository_creation_status()
     
     return jsonify({
         "success": True,
@@ -57,12 +49,7 @@ def get_repository_status(repo_id: str):
     </pre>
     """
     # TODO: 실제 DB에서 repo_id로 상태 조회 로직 추가 예정
-    response_data = RepositoryStatusResponse(
-        repo_id=repo_id,
-        status="completed",
-        progress_percent=100,
-        file_count=142
-    )
+    response_data = get_mock_repository_status(repo_id)
     
     return jsonify({
         "success": True,
@@ -76,16 +63,7 @@ def list_repositories():
     분석 완료되었거나 진행 중인 레포지토리 목록 조회.
     """
     # TODO: 실제 DB에서 전체 목록 조회 로직 추가 예정
-    response_data = RepositoryListResponse(
-        repositories=[
-            RepositoryInfo(
-                repo_id="repo_example1",
-                name="spring-security-react-ant-design-polls-app",
-                repo_url="https://github.com/callicoder/spring-security-react-ant-design-polls-app",
-                status="completed"
-            )
-        ]
-    )
+    response_data = get_mock_repository_list()
     
     return jsonify({
         "success": True,

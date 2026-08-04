@@ -1,15 +1,13 @@
 """Session management API endpoints."""
 
-import uuid
-from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
 from dataclasses import asdict
 
-from app.dtos.sessions import (
-    SessionCreateRequest,
-    SessionResponse,
-    MessageHistoryResponse,
-    ChatMessageInfo
+from app.dtos.sessions import SessionCreateRequest
+from app.sample.mock_sessions import (
+    get_mock_session_response,
+    get_mock_message_history,
+    get_mock_session_list,
 )
 
 sessions_bp = Blueprint("sessions", __name__)
@@ -32,15 +30,7 @@ def create_session():
     )
     
     # TODO: 실제 DB 세션 생성 및 저장 로직 추가 예정
-    mock_session_id = f"sess_{uuid.uuid4().hex[:8]}"
-    created_at = datetime.now(timezone.utc).isoformat()
-    
-    response_data = SessionResponse(
-        session_id=mock_session_id,
-        repo_id=req.repo_id,
-        title=req.title or "새로운 대화",
-        created_at=created_at
-    )
+    response_data = get_mock_session_response(req.repo_id, req.title)
     
     return jsonify({
         "success": True,
@@ -59,25 +49,7 @@ def get_session_messages(session_id: str):
     </pre>
     """
     # TODO: DB에서 session_id로 메시지 목록 불러오는 로직 추가 예정
-    mock_time = datetime.now(timezone.utc).isoformat()
-    
-    response_data = MessageHistoryResponse(
-        session_id=session_id,
-        messages=[
-            ChatMessageInfo(
-                message_id="msg_001",
-                role="user",
-                content="회원 탈퇴 처리 로직은 어디에 있어?",
-                created_at=mock_time
-            ),
-            ChatMessageInfo(
-                message_id="msg_002",
-                role="assistant",
-                content="회원 탈퇴는 MemberController와 MemberService에서 처리됩니다.",
-                created_at=mock_time
-            )
-        ]
-    )
+    response_data = get_mock_message_history(session_id)
     
     return jsonify({
         "success": True,
@@ -93,16 +65,7 @@ def list_sessions():
     repo_id = request.args.get("repo_id")
     
     # TODO: DB에서 전체 세션 또는 repo_id에 속한 세션 목록 조회
-    response_data = {
-        "sessions": [
-            asdict(SessionResponse(
-                session_id="sess_mock_abc123",
-                repo_id=repo_id or "repo_example1",
-                title="데이터베이스 설정 질문",
-                created_at=datetime.now(timezone.utc).isoformat()
-            ))
-        ]
-    }
+    response_data = get_mock_session_list(repo_id)
     
     return jsonify({
         "success": True,
