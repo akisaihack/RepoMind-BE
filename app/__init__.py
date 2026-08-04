@@ -2,7 +2,7 @@
 
 from flask import Flask
 
-from app.api import api_v1
+from app.api.v1 import api_v1
 from app.config import get_config
 from app.errors import register_error_handlers
 from app.extensions import db, migrate
