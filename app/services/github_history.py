@@ -1,0 +1,148 @@
+"""Collect and normalize GitHub repository development history."""
+
+from typing import Any
+
+from app.clients.github import GitHubClient
+from app.dtos.github import (
+    BranchDTO,
+    CommitDTO,
+    CommitFileDTO,
+    DevelopmentHistoryDTO,
+    IssueDTO,
+    PullRequestDTO,
+    RepositoryDTO,
+)
+
+
+class GitHubHistoryCollector:
+    """Collect repository, branch, issue, pull request, and commit history."""
+
+    def __init__(self, client: GitHubClient) -> None:
+        self._client = client
+
+    def collect(self) -> DevelopmentHistoryDTO:
+        """Collect all supported development-history resources."""
+        repository = _to_repository(self._client.get_repository())
+        branches = tuple(_to_branch(item) for item in self._client.list_branches())
+
+        issue_summaries = self._client.list_issues()
+        issues = tuple(
+            _to_issue(self._client.get_issue(item["number"])) for item in issue_summaries
+        )
+
+        pull_requests = tuple(
+            self._collect_pull_request(item["number"]) for item in self._client.list_pull_requests()
+        )
+        commits = tuple(
+            _to_commit(self._client.get_commit(item["sha"])) for item in self._client.list_commits()
+        )
+
+        return DevelopmentHistoryDTO(
+            repository=repository,
+            branches=branches,
+            issues=issues,
+            pull_requests=pull_requests,
+            commits=commits,
+        )
+
+    def _collect_pull_request(self, number: int) -> PullRequestDTO:
+        pull_request = self._client.get_pull_request(number)
+        commits = self._client.list_pull_request_commits(number)
+        files = self._client.list_pull_request_files(number)
+        return _to_pull_request(pull_request, commits, files)
+
+
+def _to_repository(data: dict[str, Any]) -> RepositoryDTO:
+    return RepositoryDTO(
+        id=data["id"],
+        name=data["name"],
+        full_name=data["full_name"],
+        html_url=data["html_url"],
+        default_branch=data["default_branch"],
+        private=data["private"],
+        description=data.get("description"),
+    )
+
+
+def _to_branch(data: dict[str, Any]) -> BranchDTO:
+    return BranchDTO(
+        name=data["name"],
+        sha=data["commit"]["sha"],
+        protected=data.get("protected", False),
+    )
+
+
+def _to_issue(data: dict[str, Any]) -> IssueDTO:
+    return IssueDTO(
+        number=data["number"],
+        title=data["title"],
+        state=data["state"],
+        body=data.get("body"),
+        author=_login(data.get("user")),
+        html_url=data["html_url"],
+        labels=tuple(label["name"] for label in data.get("labels", [])),
+        assignees=tuple(assignee["login"] for assignee in data.get("assignees", [])),
+        created_at=data["created_at"],
+        updated_at=data["updated_at"],
+        closed_at=data.get("closed_at"),
+    )
+
+
+def _to_file(data: dict[str, Any]) -> CommitFileDTO:
+    return CommitFileDTO(
+        filename=data["filename"],
+        status=data["status"],
+        additions=data.get("additions", 0),
+        deletions=data.get("deletions", 0),
+        changes=data.get("changes", 0),
+        blob_url=data.get("blob_url"),
+        raw_url=data.get("raw_url"),
+        patch=data.get("patch"),
+    )
+
+
+def _to_commit(data: dict[str, Any]) -> CommitDTO:
+    commit = data["commit"]
+    author = commit.get("author") or {}
+    committer = commit.get("committer") or {}
+    return CommitDTO(
+        sha=data["sha"],
+        message=commit["message"],
+        html_url=data["html_url"],
+        author_name=author.get("name"),
+        author_login=_login(data.get("author")),
+        authored_at=author.get("date"),
+        committed_at=committer.get("date"),
+        parent_shas=tuple(parent["sha"] for parent in data.get("parents", [])),
+        files=tuple(_to_file(file) for file in data.get("files", [])),
+    )
+
+
+def _to_pull_request(
+    data: dict[str, Any],
+    commits: list[dict[str, Any]],
+    files: list[dict[str, Any]],
+) -> PullRequestDTO:
+    return PullRequestDTO(
+        number=data["number"],
+        title=data["title"],
+        state=data["state"],
+        body=data.get("body"),
+        author=_login(data.get("user")),
+        html_url=data["html_url"],
+        base_branch=data["base"]["ref"],
+        head_branch=data["head"]["ref"],
+        head_sha=data["head"]["sha"],
+        merge_commit_sha=data.get("merge_commit_sha"),
+        merged=data.get("merged", False),
+        created_at=data["created_at"],
+        updated_at=data["updated_at"],
+        closed_at=data.get("closed_at"),
+        merged_at=data.get("merged_at"),
+        commit_shas=tuple(commit["sha"] for commit in commits),
+        files=tuple(_to_file(file) for file in files),
+    )
+
+
+def _login(user: dict[str, Any] | None) -> str | None:
+    return user.get("login") if user else None

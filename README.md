@@ -153,6 +153,25 @@ PY
 
 위 연결 확인은 그래프나 데이터를 생성하지 않습니다.
 
+## GitHub 개발 이력 수집
+
+`.env`에 GitHub 토큰과 대상 저장소를 설정합니다.
+
+```dotenv
+GITHUB_TOKEN=your-personal-access-token
+GITHUB_REPOSITORY_OWNER=your-organization-or-username
+GITHUB_REPOSITORY_NAME=your-repository
+```
+
+수집 결과를 확인합니다.
+
+```bash
+python scripts/check_github_collection.py
+```
+
+저장소, 브랜치, Issue, Pull Request, Commit 및 변경 파일 정보를 수집합니다. 현재 수집 결과는
+PostgreSQL이나 Neo4j에 저장하지 않고 실행 중 DTO 형태로만 관리합니다.
+
 ## Azure OpenAI 임베딩
 
 회사에서 제공한 Azure OpenAI 리소스 정보를 `.env`에 설정합니다. 실제 값과 API key는 커밋하거나
@@ -218,9 +237,13 @@ flask --app wsgi db upgrade
 │   │   └── health.py         # Health Check API
 │   ├── clients/
 │   │   ├── azure_openai.py   # Azure OpenAI 클라이언트 팩토리
+│   │   ├── github.py         # GitHub REST API 및 페이지네이션
 │   │   └── neo4j.py          # Neo4j 드라이버 및 연결 확인
+│   ├── dtos/
+│   │   └── github.py         # 개발 이력 수집 DTO
 │   ├── services/
-│   │   └── embedding.py      # 임베딩 서비스
+│   │   ├── embedding.py      # 임베딩 서비스
+│   │   └── github_history.py # GitHub 개발 이력 수집
 │   ├── __init__.py           # Application Factory
 │   ├── config.py             # 환경별 설정
 │   ├── errors.py             # 공통 예외 및 처리기
@@ -232,6 +255,8 @@ flask --app wsgi db upgrade
 ├── docker/
 │   └── postgres/
 │       └── init.sql           # 최초 vector 확장 활성화
+├── scripts/
+│   └── check_github_collection.py
 ├── .env.example
 ├── compose.yml
 ├── pyproject.toml
