@@ -31,6 +31,14 @@ class Neo4jClient:
         """Raise a Neo4j driver exception when the server cannot be reached."""
         self._driver.verify_connectivity()
 
+    def execute_query(
+        self,
+        query: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> Any:
+        """Execute a parameterized query without exposing the underlying driver."""
+        return self._driver.execute_query(query, parameters_=parameters or {})
+
     def close(self) -> None:
         """Release all connections owned by the driver."""
         self._driver.close()

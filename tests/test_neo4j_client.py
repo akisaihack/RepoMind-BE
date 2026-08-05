@@ -18,12 +18,17 @@ def test_neo4j_client_creates_driver_and_verifies_connectivity() -> None:
     with patch("app.clients.neo4j.GraphDatabase.driver", return_value=driver) as create_driver:
         with Neo4jClient.from_config(config) as client:
             client.verify_connectivity()
+            client.execute_query("RETURN $value", {"value": 1})
 
     create_driver.assert_called_once_with(
         "neo4j://localhost:7687",
         auth=("neo4j", "test-password"),
     )
     driver.verify_connectivity.assert_called_once_with()
+    driver.execute_query.assert_called_once_with(
+        "RETURN $value",
+        parameters_={"value": 1},
+    )
     driver.close.assert_called_once_with()
 
 
