@@ -45,3 +45,23 @@ def test_converts_neo4j_error() -> None:
 
     with pytest.raises(GraphPersistenceError, match="development graph"):
         GitHubHistoryGraphRepository(client).save(data)
+
+
+def test_issue_relationship_query_requires_existing_target_issue() -> None:
+    client = Mock()
+    data = GitHubGraphData(
+        pull_request_references=(
+            {
+                "fromKey": "100:pr:9",
+                "toKey": "100:issue:999",
+                "properties": {},
+            },
+        ),
+    )
+
+    GitHubHistoryGraphRepository(client).save(data)
+
+    query = client.execute_query.call_args.args[0]
+    assert "MATCH (source:PullRequest {key: row.fromKey})" in query
+    assert "MATCH (target:Issue {key: row.toKey})" in query
+    assert "MERGE (source)-[relation:REFERENCES]->(target)" in query
