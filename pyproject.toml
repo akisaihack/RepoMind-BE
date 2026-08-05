@@ -37,6 +37,7 @@ include = ["app*"]
 addopts = "-ra --strict-markers"
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = ["integration: requires local PostgreSQL and Neo4j services"]
 
 [tool.coverage.run]
 branch = true

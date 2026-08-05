@@ -12,6 +12,7 @@ from app.dtos.github import (
     PullRequestDTO,
     RepositoryDTO,
 )
+from app.services.github_references import extract_issue_references
 
 
 class GitHubHistoryCollector:
@@ -78,6 +79,7 @@ def _to_issue(data: dict[str, Any]) -> IssueDTO:
         title=data["title"],
         state=data["state"],
         body=data.get("body"),
+        author_id=_user_id(data.get("user")),
         author=_login(data.get("user")),
         html_url=data["html_url"],
         labels=tuple(label["name"] for label in data.get("labels", [])),
@@ -91,6 +93,7 @@ def _to_issue(data: dict[str, Any]) -> IssueDTO:
 def _to_file(data: dict[str, Any]) -> CommitFileDTO:
     return CommitFileDTO(
         filename=data["filename"],
+        previous_filename=data.get("previous_filename"),
         status=data["status"],
         additions=data.get("additions", 0),
         deletions=data.get("deletions", 0),
@@ -110,6 +113,7 @@ def _to_commit(data: dict[str, Any]) -> CommitDTO:
         message=commit["message"],
         html_url=data["html_url"],
         author_name=author.get("name"),
+        author_id=_user_id(data.get("author")),
         author_login=_login(data.get("author")),
         authored_at=author.get("date"),
         committed_at=committer.get("date"),
@@ -128,6 +132,7 @@ def _to_pull_request(
         title=data["title"],
         state=data["state"],
         body=data.get("body"),
+        author_id=_user_id(data.get("user")),
         author=_login(data.get("user")),
         html_url=data["html_url"],
         base_branch=data["base"]["ref"],
@@ -141,8 +146,13 @@ def _to_pull_request(
         merged_at=data.get("merged_at"),
         commit_shas=tuple(commit["sha"] for commit in commits),
         files=tuple(_to_file(file) for file in files),
+        issue_references=extract_issue_references(data.get("title"), data.get("body")),
     )
 
 
 def _login(user: dict[str, Any] | None) -> str | None:
     return user.get("login") if user else None
+
+
+def _user_id(user: dict[str, Any] | None) -> int | None:
+    return user.get("id") if user else None

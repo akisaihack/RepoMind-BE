@@ -27,6 +27,7 @@ class IssueDTO:
     title: str
     state: str
     body: str | None
+    author_id: int | None
     author: str | None
     html_url: str
     labels: tuple[str, ...]
@@ -39,6 +40,7 @@ class IssueDTO:
 @dataclass(frozen=True, slots=True)
 class CommitFileDTO:
     filename: str
+    previous_filename: str | None
     status: str
     additions: int
     deletions: int
@@ -54,6 +56,7 @@ class CommitDTO:
     message: str
     html_url: str
     author_name: str | None
+    author_id: int | None
     author_login: str | None
     authored_at: str | None
     committed_at: str | None
@@ -62,11 +65,18 @@ class CommitDTO:
 
 
 @dataclass(frozen=True, slots=True)
+class IssueReferenceDTO:
+    issue_number: int
+    reference_type: str
+
+
+@dataclass(frozen=True, slots=True)
 class PullRequestDTO:
     number: int
     title: str
     state: str
     body: str | None
+    author_id: int | None
     author: str | None
     html_url: str
     base_branch: str
@@ -80,6 +90,7 @@ class PullRequestDTO:
     merged_at: str | None
     commit_shas: tuple[str, ...]
     files: tuple[CommitFileDTO, ...]
+    issue_references: tuple[IssueReferenceDTO, ...]
 
 
 @dataclass(frozen=True, slots=True)
