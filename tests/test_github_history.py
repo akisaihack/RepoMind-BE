@@ -31,7 +31,7 @@ class SampleGitHubClient:
             "title": "Collect GitHub history",
             "state": "open",
             "body": "Issue body",
-            "user": {"login": "octocat"},
+            "user": {"id": 1, "login": "octocat"},
             "html_url": f"https://github.com/octocat/Hello-World/issues/{number}",
             "labels": [{"name": "enhancement"}],
             "assignees": [{"login": "developer"}],
@@ -48,8 +48,8 @@ class SampleGitHubClient:
             "number": number,
             "title": "Add GitHub collector",
             "state": "closed",
-            "body": "PR body",
-            "user": {"login": "developer"},
+            "body": "Closes #7",
+            "user": {"id": 2, "login": "developer"},
             "html_url": f"https://github.com/octocat/Hello-World/pull/{number}",
             "base": {"ref": "main"},
             "head": {"ref": "feature/github", "sha": "abc123"},
@@ -79,7 +79,7 @@ class SampleGitHubClient:
                 "author": {"name": "Developer", "date": "2026-08-01T00:00:00Z"},
                 "committer": {"date": "2026-08-01T00:00:00Z"},
             },
-            "author": {"login": "developer"},
+            "author": {"id": 2, "login": "developer"},
             "parents": [{"sha": "parent123"}],
             "files": [self._file()],
         }
@@ -88,6 +88,7 @@ class SampleGitHubClient:
     def _file() -> dict[str, Any]:
         return {
             "filename": "app/clients/github.py",
+            "previous_filename": "app/github.py",
             "status": "added",
             "additions": 10,
             "deletions": 0,
@@ -104,8 +105,12 @@ def test_collects_sample_repository_development_history() -> None:
     assert history.repository.full_name == "octocat/Hello-World"
     assert history.branches[0].sha == "abc123"
     assert history.issues[0].number == 7
+    assert history.issues[0].author_id == 1
     assert history.issues[0].labels == ("enhancement",)
     assert history.pull_requests[0].commit_shas == ("abc123",)
+    assert history.pull_requests[0].issue_references[0].issue_number == 7
     assert history.pull_requests[0].files[0].filename == "app/clients/github.py"
     assert history.commits[0].parent_shas == ("parent123",)
+    assert history.commits[0].author_id == 2
     assert history.commits[0].files[0].additions == 10
+    assert history.commits[0].files[0].previous_filename == "app/github.py"
