@@ -9,7 +9,7 @@ def test_embedding_api_returns_dimension_and_preview(client: FlaskClient) -> Non
     service = Mock()
     service.embed.return_value = [0.01, -0.02, 0.03, 0.04]
 
-    with patch("app.api.embeddings.get_embedding_service", return_value=service):
+    with patch("app.api.v1.embeddings.get_embedding_service", return_value=service):
         response = client.post(
             "/api/v1/embeddings/test",
             json={"text": "예약 취소 처리 흐름을 분석합니다."},

@@ -11,4 +11,7 @@ instance/
 dist/
 build/
 .DS_Store
+venv/
 
+
+scripts/*_output.json
