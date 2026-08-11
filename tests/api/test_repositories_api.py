@@ -4,14 +4,14 @@ def test_create_repository(client):
     """Test creating a new repository analysis request."""
     response = client.post(
         "/api/v1/repositories/",
-        json={"repo_url": "https://github.com/owner/repo"}
+        json={"repository_url": "https://github.com/owner/repo"}
     )
     assert response.status_code == 201
     
     data = response.get_json()
     assert data["success"] is True
-    assert "repo_id" in data["data"]
-    assert data["data"]["status"] == "indexing"
+    assert "id" in data["data"]
+    assert data["data"]["analysis_status"] == "pending"
 
 
 def test_get_repository_status(client):
@@ -22,9 +22,8 @@ def test_get_repository_status(client):
     
     data = response.get_json()
     assert data["success"] is True
-    assert data["data"]["repo_id"] == repo_id
-    assert data["data"]["status"] == "completed"
-    assert data["data"]["progress_percent"] == 100
+    assert data["data"]["id"] == repo_id
+    assert data["data"]["analysis_status"] == "pending"
 
 
 def test_list_repositories(client):

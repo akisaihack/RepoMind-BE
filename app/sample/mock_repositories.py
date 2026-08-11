@@ -1,10 +1,11 @@
 """Mock data for Repository API."""
 
 import uuid
+
 from app.dtos.repositories import (
-    RepositoryStatusResponse,
     RepositoryInfo,
     RepositoryListResponse,
+    RepositoryStatusResponse,
 )
 
 
@@ -12,20 +13,18 @@ def get_mock_repository_creation_status() -> RepositoryStatusResponse:
     """Returns mock status for a newly registered repository."""
     mock_repo_id = f"repo_{uuid.uuid4().hex[:8]}"
     return RepositoryStatusResponse(
-        repo_id=mock_repo_id,
-        status="indexing",
-        progress_percent=15,
-        file_count=0
+        id=mock_repo_id,
+        analysis_status="pending",
+        latest_analyzed_sha=None,
     )
 
 
 def get_mock_repository_status(repo_id: str) -> RepositoryStatusResponse:
     """Returns mock completed status for a given repository."""
     return RepositoryStatusResponse(
-        repo_id=repo_id,
-        status="completed",
-        progress_percent=100,
-        file_count=142
+        id=repo_id,
+        analysis_status="pending",
+        latest_analyzed_sha=None,
     )
 
 
@@ -34,10 +33,11 @@ def get_mock_repository_list() -> RepositoryListResponse:
     return RepositoryListResponse(
         repositories=[
             RepositoryInfo(
-                repo_id="repo_example1",
-                name="spring-security-react-ant-design-polls-app",
-                repo_url="https://github.com/callicoder/spring-security-react-ant-design-polls-app",
-                status="completed"
+                id="repo_example1",
+                repository_url="https://github.com/callicoder/spring-security-react-ant-design-polls-app",
+                branch="main",
+                analysis_status="pending",
+                latest_analyzed_sha=None,
             )
         ]
     )

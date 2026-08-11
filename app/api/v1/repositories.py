@@ -1,13 +1,14 @@
 """Repository management API endpoints."""
 
-from flask import Blueprint, jsonify, request
 from dataclasses import asdict
+
+from flask import Blueprint, jsonify, request
 
 from app.dtos.repositories import RepositoryCreateRequest
 from app.sample.mock_repositories import (
     get_mock_repository_creation_status,
-    get_mock_repository_status,
     get_mock_repository_list,
+    get_mock_repository_status,
 )
 
 repositories_bp = Blueprint("repositories", __name__)
@@ -24,8 +25,8 @@ def create_repository():
     </pre>
     """
     data = request.get_json() or {}
-    req = RepositoryCreateRequest(
-        repo_url=data.get("repo_url", ""),
+    _ = RepositoryCreateRequest(
+        repository_url=data.get("repository_url", ""),
         branch=data.get("branch", "main")
     )
     
