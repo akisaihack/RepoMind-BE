@@ -14,8 +14,16 @@ from app.graph.repositories.code_graph import (
 
 
 def _document() -> GraphDocument:
-    file_node = GraphNode("100:file:src/App.java", "File", {"path": "src/App.java"})
-    class_node = GraphNode("100:class:src/App.java:0", "Class", {"name": "App"})
+    file_node = GraphNode(
+        "100:file:src/App.java",
+        "File",
+        {"path": "src/App.java", "githubRepositoryId": 100},
+    )
+    class_node = GraphNode(
+        "100:class:src/App.java:0",
+        "Class",
+        {"name": "App", "githubRepositoryId": 100},
+    )
     return GraphDocument(
         nodes=(file_node, class_node),
         edges=(GraphEdge("DECLARES", file_node.id, class_node.id, {}),),
@@ -33,18 +41,33 @@ def _transactional_client() -> tuple[Mock, Mock]:
     return client, transaction
 
 
+def _save(repository: CodeGraphRepository, document: GraphDocument) -> int:
+    return repository.save(
+        document,
+        github_repository_id=100,
+        analysis_run_id="run-current",
+    )
+
+
 def test_merges_nodes_before_relationships() -> None:
     client, transaction = _transactional_client()
 
-    skipped = CodeGraphRepository(client).save(_document())
+    skipped = _save(CodeGraphRepository(client), _document())
 
     assert skipped == 0
     client.execute_write.assert_called_once()
-    assert transaction.run.call_count == 3
+    assert transaction.run.call_count == 5
     queries = [call.args[0] for call in transaction.run.call_args_list]
     assert "MERGE (node:File {key: row.key})" in queries[0]
+    assert "SET node.analysisRunId" not in queries[0]
+    assert "SET node.analysisRunId = $analysisRunId" in queries[1]
     assert "MERGE (source)-[relation:DECLARES]->(target)" in queries[2]
-    assert transaction.run.return_value.consume.call_count == 3
+    assert "SET relation.analysisRunId = $analysisRunId" in queries[2]
+    assert "DELETE relation" in queries[3]
+    assert "DETACH DELETE node" in queries[4]
+    assert transaction.run.call_args_list[3].kwargs["repositoryId"] == 100
+    assert transaction.run.call_args_list[3].kwargs["analysisRunId"] == "run-current"
+    assert transaction.run.return_value.consume.call_count == 5
 
 
 def test_skips_unresolved_external_relationship() -> None:
@@ -56,17 +79,21 @@ def test_skips_unresolved_external_relationship() -> None:
     )
     client, _ = _transactional_client()
 
-    assert CodeGraphRepository(client).save(document) == 1
+    assert _save(CodeGraphRepository(client), document) == 1
 
 
 def test_rejects_unknown_labels_and_relationships() -> None:
     client = Mock()
     with pytest.raises(CodeGraphValidationError, match="node label"):
-        CodeGraphRepository(client).save(GraphDocument((GraphNode("x", "Injected", {}),), ()))
+        _save(
+            CodeGraphRepository(client),
+            GraphDocument((GraphNode("x", "Injected", {}),), ()),
+        )
     with pytest.raises(CodeGraphValidationError, match="relationship type"):
         document = _document()
-        CodeGraphRepository(client).save(
-            GraphDocument(document.nodes, (GraphEdge("BAD", *[n.id for n in document.nodes], {}),))
+        _save(
+            CodeGraphRepository(client),
+            GraphDocument(document.nodes, (GraphEdge("BAD", *[n.id for n in document.nodes], {}),)),
         )
 
 
@@ -76,7 +103,7 @@ def test_converts_neo4j_errors() -> None:
     client.execute_write.side_effect = error
 
     with pytest.raises(CodeGraphPersistenceError, match="source-code graph") as raised:
-        CodeGraphRepository(client).save(_document())
+        _save(CodeGraphRepository(client), _document())
 
     assert raised.value.__cause__ is error
 
@@ -102,28 +129,56 @@ def test_node_or_relationship_failure_aborts_the_transaction(failure_call: int) 
     client.execute_write.side_effect = execute_with_failure
 
     with pytest.raises(CodeGraphPersistenceError) as raised:
-        CodeGraphRepository(client).save(_document())
+        _save(CodeGraphRepository(client), _document())
 
     assert raised.value.__cause__ is error
 
 
 def test_splits_large_node_batches_inside_one_transaction() -> None:
     client, transaction = _transactional_client()
-    nodes = tuple(GraphNode(f"100:file:{index}.java", "File", {}) for index in range(5))
+    nodes = tuple(
+        GraphNode(
+            f"100:file:{index}.java",
+            "File",
+            {"githubRepositoryId": 100},
+        )
+        for index in range(5)
+    )
 
-    CodeGraphRepository(client, batch_size=2).save(GraphDocument(nodes, ()))
+    _save(CodeGraphRepository(client, batch_size=2), GraphDocument(nodes, ()))
 
     client.execute_write.assert_called_once()
-    assert [len(call.kwargs["rows"]) for call in transaction.run.call_args_list] == [2, 2, 1]
+    row_calls = [call for call in transaction.run.call_args_list if "rows" in call.kwargs]
+    assert [len(call.kwargs["rows"]) for call in row_calls] == [2, 2, 1]
 
 
-def test_empty_document_does_not_open_transaction() -> None:
-    client = Mock()
+def test_empty_document_runs_cleanup_transaction() -> None:
+    client, transaction = _transactional_client()
 
-    assert CodeGraphRepository(client).save(GraphDocument((), ())) == 0
-    client.execute_write.assert_not_called()
+    assert _save(CodeGraphRepository(client), GraphDocument((), ())) == 0
+    client.execute_write.assert_called_once()
+    assert transaction.run.call_count == 2
 
 
 def test_rejects_non_positive_batch_size() -> None:
     with pytest.raises(ValueError, match="batch size"):
         CodeGraphRepository(Mock(), batch_size=0)
+
+
+def test_rejects_nodes_from_another_repository() -> None:
+    document = GraphDocument(
+        (GraphNode("101:file:a.java", "File", {"githubRepositoryId": 101}),),
+        (),
+    )
+
+    with pytest.raises(CodeGraphValidationError, match="outside repository"):
+        _save(CodeGraphRepository(Mock()), document)
+
+
+def test_rejects_empty_analysis_run_id() -> None:
+    with pytest.raises(CodeGraphValidationError, match="run ID"):
+        CodeGraphRepository(Mock()).save(
+            GraphDocument((), ()),
+            github_repository_id=100,
+            analysis_run_id="",
+        )

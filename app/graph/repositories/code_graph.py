@@ -1,7 +1,7 @@
 """Validated Neo4j persistence for source-code graph documents."""
 
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 from neo4j import ManagedTransaction
 from neo4j.exceptions import Neo4jError
@@ -22,6 +22,7 @@ ALLOWED_RELATIONSHIP_TYPES = frozenset(
         "EXPOSES",
     }
 )
+CODE_NODE_LABELS = frozenset(ALLOWED_NODE_LABELS - {"File"})
 DEFAULT_BATCH_SIZE = 1_000
 
 
@@ -40,9 +41,17 @@ class CodeGraphRepository:
         self._client = client
         self._batch_size = batch_size
 
-    def save(self, document: GraphDocument) -> int:
-        """MERGE internal graph nodes and edges; return skipped external edge count."""
+    def save(
+        self,
+        document: GraphDocument,
+        *,
+        github_repository_id: int,
+        analysis_run_id: str,
+    ) -> int:
+        """Synchronize one repository's code graph in a managed transaction."""
+        _validate_sync_identity(github_repository_id, analysis_run_id)
         nodes_by_id = self._validate_nodes(document.nodes)
+        self._validate_repository_scope(nodes_by_id.values(), github_repository_id)
         internal_edges, skipped_external = self._validate_edges(document.edges, nodes_by_id)
 
         node_batches: dict[str, list[dict]] = defaultdict(list)
@@ -61,18 +70,32 @@ class CodeGraphRepository:
                 }
             )
 
-        if not node_batches and not relationship_batches:
-            return skipped_external
-
         def _save_in_transaction(transaction: ManagedTransaction) -> None:
-            # Future repository-scoped cleanup belongs at the end of this callback so
-            # graph replacement and stale-node deletion commit or roll back together.
             for label, rows in node_batches.items():
                 for batch in _batches(rows, self._batch_size):
-                    transaction.run(_node_query(label), rows=batch).consume()
+                    transaction.run(
+                        _node_query(label),
+                        rows=batch,
+                        analysisRunId=analysis_run_id,
+                    ).consume()
             for labels, rows in relationship_batches.items():
                 for batch in _batches(rows, self._batch_size):
-                    transaction.run(_relationship_query(*labels), rows=batch).consume()
+                    transaction.run(
+                        _relationship_query(*labels),
+                        rows=batch,
+                        analysisRunId=analysis_run_id,
+                    ).consume()
+            transaction.run(
+                _DELETE_STALE_CODE_RELATIONSHIPS,
+                repositoryId=github_repository_id,
+                analysisRunId=analysis_run_id,
+                relationshipTypes=sorted(ALLOWED_RELATIONSHIP_TYPES),
+            ).consume()
+            transaction.run(
+                _DELETE_STALE_CODE_NODES,
+                repositoryId=github_repository_id,
+                analysisRunId=analysis_run_id,
+            ).consume()
 
         try:
             self._client.execute_write(_save_in_transaction)
@@ -94,6 +117,14 @@ class CodeGraphRepository:
                 raise CodeGraphValidationError(f"Conflicting graph nodes share key {node.id!r}.")
             nodes_by_id[node.id] = node
         return nodes_by_id
+
+    @staticmethod
+    def _validate_repository_scope(nodes: Iterable[GraphNode], github_repository_id: int) -> None:
+        for node in nodes:
+            if node.properties.get("githubRepositoryId") != github_repository_id:
+                raise CodeGraphValidationError(
+                    f"Graph node {node.id!r} is outside repository {github_repository_id}."
+                )
 
     @staticmethod
     def _validate_edges(
@@ -125,10 +156,12 @@ def _batches(rows: list[dict], batch_size: int) -> Iterator[list[dict]]:
 
 
 def _node_query(label: str) -> str:
+    run_marker = "SET node.analysisRunId = $analysisRunId" if label in CODE_NODE_LABELS else ""
     return f"""
 UNWIND $rows AS row
 MERGE (node:{label} {{key: row.key}})
 SET node += row.properties
+{run_marker}
 """
 
 
@@ -139,4 +172,42 @@ MATCH (source:{source_label} {{key: row.fromKey}})
 MATCH (target:{target_label} {{key: row.toKey}})
 MERGE (source)-[relation:{relationship}]->(target)
 SET relation += row.properties
+SET relation.analysisRunId = $analysisRunId
 """
+
+
+_DELETE_STALE_CODE_RELATIONSHIPS = """
+MATCH (source)-[relation]->(target)
+WHERE type(relation) IN $relationshipTypes
+  AND (
+    source.githubRepositoryId = $repositoryId
+    OR target.githubRepositoryId = $repositoryId
+  )
+  AND (
+    relation.analysisRunId IS NULL
+    OR relation.analysisRunId <> $analysisRunId
+  )
+DELETE relation
+"""
+
+_DELETE_STALE_CODE_NODES = """
+MATCH (node)
+WHERE (node:Package OR node:Class OR node:Interface OR node:Method OR node:Endpoint)
+  AND node.githubRepositoryId = $repositoryId
+  AND (
+    node.analysisRunId IS NULL
+    OR node.analysisRunId <> $analysisRunId
+  )
+DETACH DELETE node
+"""
+
+
+def _validate_sync_identity(github_repository_id: int, analysis_run_id: str) -> None:
+    if (
+        not isinstance(github_repository_id, int)
+        or isinstance(github_repository_id, bool)
+        or github_repository_id <= 0
+    ):
+        raise CodeGraphValidationError("GitHub repository ID must be a positive integer.")
+    if not isinstance(analysis_run_id, str) or not analysis_run_id.strip():
+        raise CodeGraphValidationError("Analysis run ID must be non-empty.")
