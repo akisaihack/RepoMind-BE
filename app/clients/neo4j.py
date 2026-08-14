@@ -1,10 +1,12 @@
 """Neo4j driver lifecycle and connectivity client."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, TypeVar
 
-from neo4j import GraphDatabase
+from neo4j import GraphDatabase, ManagedTransaction
+
+TransactionResult = TypeVar("TransactionResult")
 
 
 class Neo4jClient:
@@ -38,6 +40,14 @@ class Neo4jClient:
     ) -> Any:
         """Execute a parameterized query without exposing the underlying driver."""
         return self._driver.execute_query(query, parameters_=parameters or {})
+
+    def execute_write(
+        self,
+        work: Callable[[ManagedTransaction], TransactionResult],
+    ) -> TransactionResult:
+        """Run a unit of work in one managed write transaction."""
+        with self._driver.session() as session:
+            return session.execute_write(work)
 
     def close(self) -> None:
         """Release all connections owned by the driver."""
