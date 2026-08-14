@@ -18,6 +18,7 @@ SAMPLE_REPO_PATH = Path(
     r"D:\PJ\repomind-testdata\spring-security-react-ant-design-polls-app\polling-app-server"
 )
 OUTPUT_PATH = Path(__file__).resolve().parent / "graph_mapping_output.json"
+GITHUB_REPOSITORY_ID = 1
 
 
 def main() -> None:
@@ -32,7 +33,7 @@ def main() -> None:
         source_bytes = file_path.read_bytes().replace(b"\r\n", b"\n")
         relative_path = file_path.relative_to(SAMPLE_REPO_PATH).as_posix()
         file_result = parse_java_file(relative_path, source_bytes)
-        documents.append(map_java_file(file_result))
+        documents.append(map_java_file(GITHUB_REPOSITORY_ID, file_result))
 
     final_document = resolve_cross_file_references(documents)
 
