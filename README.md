@@ -323,6 +323,18 @@ python scripts/import_code_graph.py \
   --repository-path /path/to/repository
 ```
 
+import 전에 로컬 저장소의 `origin`과 `githubRepositoryId`가 가리키는 GitHub 저장소가 같은지
+검증합니다. Neo4j에 Repository 정보가 있으면 이를 먼저 사용하고, 없으면 GitHub API로 조회합니다.
+일치하지 않거나 `origin`이 없으면 import를 중단합니다. 검증을 의도적으로 생략해야 할 때만 다음
+옵션을 명시합니다.
+
+```bash
+python scripts/import_code_graph.py \
+  --github-repository-id 1296269 \
+  --repository-path /path/to/repository \
+  --skip-repository-validation
+```
+
 백엔드를 호스트에서 실행할 때 `NEO4J_URI=bolt://127.0.0.1:7687`은 실행 중인 컴퓨터의
 로컬 Neo4j를 가리킵니다. 백엔드까지 Docker 컨테이너에서 실행하는 경우에는 Compose 서비스
 이름을 사용하여 `NEO4J_URI=bolt://neo4j:7687`로 설정해야 합니다.
