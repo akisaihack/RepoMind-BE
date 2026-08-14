@@ -119,3 +119,16 @@ def test_deduplicates_files_and_developers() -> None:
     assert len(graph.files) == 1
     assert len(graph.repository_files) == 1
     assert len(graph.developers) == 2
+
+
+def test_normalizes_file_keys_shared_by_commit_and_pull_request() -> None:
+    history = _history()
+    commit_file = history.commits[0].files[0]
+    object.__setattr__(commit_file, "filename", r".\app\service.py")
+
+    graph = GitHubGraphMapper().map(history, {})
+
+    assert len(graph.files) == 1
+    assert graph.files[0]["key"] == "100:file:app/service.py"
+    assert graph.files[0]["properties"]["path"] == "app/service.py"
+    assert graph.commit_files[0]["toKey"] == graph.pull_request_files[0]["toKey"]

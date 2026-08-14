@@ -3,6 +3,13 @@
 from typing import Any
 
 from app.dtos.github import DevelopmentHistoryDTO
+from app.graph.identifiers import (
+    file_key as make_file_key,
+)
+from app.graph.identifiers import (
+    normalize_repository_path,
+    repository_scoped_key,
+)
 from app.graph.models import GitHubGraphData, GraphRow
 
 
@@ -49,17 +56,21 @@ class GitHubGraphMapper:
         developer_commits: list[GraphRow] = []
 
         def ensure_commit(sha: str) -> str:
-            key = _key(repository_id, "commit", sha)
+            key = repository_scoped_key(repository_id, "commit", sha)
             commits.setdefault(key, {"key": key, "properties": {"sha": sha}})
             return key
 
         def ensure_file(path: str) -> str:
-            key = _key(repository_id, "file", path)
+            normalized_path = normalize_repository_path(path)
+            key = make_file_key(repository_id, normalized_path)
             files.setdefault(
                 key,
                 {
                     "key": key,
-                    "properties": {"path": path, "githubRepositoryId": repository_id},
+                    "properties": {
+                        "path": normalized_path,
+                        "githubRepositoryId": repository_id,
+                    },
                 },
             )
             repository_files.setdefault(key, _repository_relation(repository_id, key))
@@ -74,7 +85,7 @@ class GitHubGraphMapper:
             }
 
         for branch in history.branches:
-            key = _key(repository_id, "branch", branch.name)
+            key = repository_scoped_key(repository_id, "branch", branch.name)
             branches[key] = {
                 "key": key,
                 "properties": _properties(
@@ -88,7 +99,7 @@ class GitHubGraphMapper:
             branch_heads.append({"fromKey": key, "toKey": commit_key, "properties": {}})
 
         for issue in history.issues:
-            key = _key(repository_id, "issue", issue.number)
+            key = repository_scoped_key(repository_id, "issue", issue.number)
             issues[key] = {
                 "key": key,
                 "properties": _properties(
@@ -113,7 +124,7 @@ class GitHubGraphMapper:
                 )
 
         for pull_request in history.pull_requests:
-            key = _key(repository_id, "pr", pull_request.number)
+            key = repository_scoped_key(repository_id, "pr", pull_request.number)
             pull_requests[key] = {
                 "key": key,
                 "properties": _properties(
@@ -162,7 +173,7 @@ class GitHubGraphMapper:
             for reference in pull_request.issue_references:
                 relation = {
                     "fromKey": key,
-                    "toKey": _key(repository_id, "issue", reference.issue_number),
+                    "toKey": repository_scoped_key(repository_id, "issue", reference.issue_number),
                     "properties": {},
                 }
                 if reference.reference_type == "resolves":
@@ -227,10 +238,6 @@ class GitHubGraphMapper:
         )
 
 
-def _key(repository_id: int, kind: str, value: str | int) -> str:
-    return f"{repository_id}:{kind}:{value}"
-
-
 def _properties(**values: Any) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value is not None}
 
@@ -245,5 +252,9 @@ def _change_properties(file: Any) -> dict[str, Any]:
         additions=file.additions,
         deletions=file.deletions,
         changes=file.changes,
-        previousPath=file.previous_filename,
+        previousPath=(
+            normalize_repository_path(file.previous_filename)
+            if file.previous_filename is not None
+            else None
+        ),
     )
