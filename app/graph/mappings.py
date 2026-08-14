@@ -29,6 +29,7 @@ from collections.abc import Iterable
 
 from app.dtos.analysis import JavaClassResult, JavaFileResult, JavaMethodResult
 from app.dtos.graph import GraphDocument, GraphEdge, GraphNode
+from app.graph.identifiers import file_key, normalize_repository_path, repository_scoped_key
 
 # ---------- 노드 ID 생성 ----------
 #
@@ -39,34 +40,43 @@ from app.dtos.graph import GraphDocument, GraphEdge, GraphNode
 # 같은 노드로 합쳐지길 원해서(Neo4j MERGE 기준 키 역할).
 
 
-def _package_node_id(package_name: str) -> str:
-    return f"Package::{package_name}"
+def _package_node_id(github_repository_id: int, package_name: str) -> str:
+    return repository_scoped_key(github_repository_id, "package", package_name)
 
 
-def _class_node_id(file_path: str, class_index: int) -> str:
-    return f"Class::{file_path}::{class_index}"
+def _class_node_id(
+    github_repository_id: int, file_path: str, class_index: int, node_type: str
+) -> str:
+    return repository_scoped_key(
+        github_repository_id, node_type.lower(), f"{file_path}:{class_index}"
+    )
 
 
 def _method_node_id(class_id: str, method_index: int) -> str:
-    return f"Method::{class_id}::{method_index}"
+    return f"{class_id}:method:{method_index}"
 
 
-def _endpoint_node_id(http_method: str, path: str) -> str:
-    return f"Endpoint::{http_method}::{path}"
+def _endpoint_node_id(github_repository_id: int, http_method: str, path: str) -> str:
+    return repository_scoped_key(github_repository_id, "endpoint", f"{http_method}:{path}")
 
 
 # ---------- 노드 생성 ----------
 
 
-def _build_package_node(package_name: str) -> GraphNode:
+def _build_package_node(github_repository_id: int, package_name: str) -> GraphNode:
     return GraphNode(
-        id=_package_node_id(package_name),
+        id=_package_node_id(github_repository_id, package_name),
         type="Package",
-        properties={"name": package_name},
+        properties={"name": package_name, "githubRepositoryId": github_repository_id},
     )
 
 
-def _build_class_node(class_id: str, class_result: JavaClassResult, file_path: str) -> GraphNode:
+def _build_class_node(
+    class_id: str,
+    class_result: JavaClassResult,
+    file_path: str,
+    github_repository_id: int,
+) -> GraphNode:
     node_type = "Interface" if class_result.kind == "interface" else "Class"
     return GraphNode(
         id=class_id,
@@ -75,15 +85,17 @@ def _build_class_node(class_id: str, class_result: JavaClassResult, file_path: s
             "name": class_result.name,
             "layer": class_result.layer,
             "path": file_path,
-            "fields": [
-                {"name": field.name, "type": field.type} for field in class_result.fields
-            ],
+            "githubRepositoryId": github_repository_id,
+            "fields": [{"name": field.name, "type": field.type} for field in class_result.fields],
         },
     )
 
 
 def _build_method_node(
-    method_id: str, method_result: JavaMethodResult, class_result: JavaClassResult
+    method_id: str,
+    method_result: JavaMethodResult,
+    class_result: JavaClassResult,
+    github_repository_id: int,
 ) -> GraphNode:
     properties: dict = {
         "name": method_result.name,
@@ -93,6 +105,7 @@ def _build_method_node(
         "end_line": method_result.end_line,
         # CALLS 해석 시 "이 메서드가 어느 클래스 소속인지" 역참조하는 용도
         "class_name": class_result.name,
+        "githubRepositoryId": github_repository_id,
     }
     if method_result.api_mapping:
         properties["http_method"] = method_result.api_mapping.http_method
@@ -100,11 +113,15 @@ def _build_method_node(
     return GraphNode(id=method_id, type="Method", properties=properties)
 
 
-def _build_endpoint_node(http_method: str, path: str) -> GraphNode:
+def _build_endpoint_node(github_repository_id: int, http_method: str, path: str) -> GraphNode:
     return GraphNode(
-        id=_endpoint_node_id(http_method, path),
+        id=_endpoint_node_id(github_repository_id, http_method, path),
         type="Endpoint",
-        properties={"http_method": http_method, "path": path},
+        properties={
+            "http_method": http_method,
+            "path": path,
+            "githubRepositoryId": github_repository_id,
+        },
     )
 
 
@@ -174,7 +191,9 @@ def _build_calls_edges(
         receiver_type = _resolve_receiver_type(call.receiver, class_result)
         if receiver_type:
             properties["receiver_type"] = receiver_type
-        edges.append(GraphEdge(type="CALLS", source=method_id, target=call.name, properties=properties))
+        edges.append(
+            GraphEdge(type="CALLS", source=method_id, target=call.name, properties=properties)
+        )
     return edges
 
 
@@ -185,7 +204,7 @@ def _build_exposes_edge(method_id: str, endpoint_id: str) -> GraphEdge:
 # ---------- 1단계: 파일 하나 변환 ----------
 
 
-def map_java_file(file_result: JavaFileResult) -> GraphDocument:
+def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> GraphDocument:
     """자바 파일 파싱 결과 하나를 GraphDocument(노드+엣지)로 변환.
 
     CALLS/EXTENDS/IMPLEMENTS/IMPORTS/MANAGES 엣지는 아직 미해결
@@ -195,15 +214,38 @@ def map_java_file(file_result: JavaFileResult) -> GraphDocument:
     """
     nodes: list[GraphNode] = []
     edges: list[GraphEdge] = []
+    normalized_path = normalize_repository_path(file_result.path)
+    source_file_id = file_key(github_repository_id, normalized_path)
+    nodes.append(
+        GraphNode(
+            id=source_file_id,
+            type="File",
+            properties={
+                "path": normalized_path,
+                "githubRepositoryId": github_repository_id,
+            },
+        )
+    )
 
     package_id: str | None = None
     if file_result.package:
-        package_id = _package_node_id(file_result.package)
-        nodes.append(_build_package_node(file_result.package))
+        package_id = _package_node_id(github_repository_id, file_result.package)
+        nodes.append(_build_package_node(github_repository_id, file_result.package))
 
     for class_index, class_result in enumerate(file_result.classes):
-        class_id = _class_node_id(file_result.path, class_index)
-        nodes.append(_build_class_node(class_id, class_result, file_result.path))
+        node_type = "Interface" if class_result.kind == "interface" else "Class"
+        class_id = _class_node_id(github_repository_id, normalized_path, class_index, node_type)
+        nodes.append(
+            _build_class_node(class_id, class_result, normalized_path, github_repository_id)
+        )
+        edges.append(
+            GraphEdge(
+                type="DECLARES",
+                source=source_file_id,
+                target=class_id,
+                properties={},
+            )
+        )
 
         if package_id:
             edges.append(_build_contains_edge(package_id, class_id))
@@ -221,15 +263,22 @@ def map_java_file(file_result: JavaFileResult) -> GraphDocument:
 
         for method_index, method_result in enumerate(class_result.methods):
             method_id = _method_node_id(class_id, method_index)
-            nodes.append(_build_method_node(method_id, method_result, class_result))
+            nodes.append(
+                _build_method_node(method_id, method_result, class_result, github_repository_id)
+            )
             edges.append(_build_contains_edge(class_id, method_id))
             edges.extend(_build_calls_edges(method_id, method_result, class_result))
 
             if method_result.api_mapping:
                 http_method = method_result.api_mapping.http_method
                 path = method_result.api_mapping.path
-                nodes.append(_build_endpoint_node(http_method, path))
-                edges.append(_build_exposes_edge(method_id, _endpoint_node_id(http_method, path)))
+                nodes.append(_build_endpoint_node(github_repository_id, http_method, path))
+                edges.append(
+                    _build_exposes_edge(
+                        method_id,
+                        _endpoint_node_id(github_repository_id, http_method, path),
+                    )
+                )
 
     return GraphDocument(nodes=tuple(nodes), edges=tuple(edges))
 
@@ -281,7 +330,9 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
             # 원래 후보 목록으로 되돌아감 — 안 좁히는 것보다는 넓게라도 남기는 게 나음.
             receiver_type = edge.properties.get("receiver_type")
             if receiver_type and candidates:
-                narrowed = [cid for cid in candidates if method_class_name.get(cid) == receiver_type]
+                narrowed = [
+                    cid for cid in candidates if method_class_name.get(cid) == receiver_type
+                ]
                 if narrowed:
                     candidates = narrowed
         elif edge.type == "IMPORTS":
@@ -319,4 +370,5 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
                     )
                 )
 
-    return GraphDocument(nodes=tuple(all_nodes), edges=tuple(resolved_edges))
+    unique_nodes = {node.id: node for node in all_nodes}
+    return GraphDocument(nodes=tuple(unique_nodes.values()), edges=tuple(resolved_edges))
