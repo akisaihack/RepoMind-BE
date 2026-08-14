@@ -292,5 +292,41 @@ flask --app wsgi db upgrade
 └── wsgi.py
 ```
 
-PostgreSQL 테이블과 SQLAlchemy 모델, Neo4j 그래프 모델·쿼리·Repository·Service, Tree-sitter
-연동 및 비즈니스 로직은 아직 포함하지 않습니다.
+PostgreSQL과 Neo4j 저장소, GitHub 개발 이력 수집, Tree-sitter 기반 Java 코드 분석 및 코드 그래프
+저장 기능이 포함되어 있습니다.
+
+## 코드 그래프 가져오기
+
+GitHub 개발 이력과 Java 코드 분석 결과는 다음 형식의 키를 사용하여 동일한 `File` 노드를
+공유합니다.
+
+```text
+{githubRepositoryId}:file:{normalizedRepositoryRelativePath}
+```
+
+두 import 과정 모두 Windows와 POSIX 경로 표현을 정규화하고 Neo4j `MERGE`를 사용합니다.
+따라서 실행 순서가 달라지거나 같은 데이터를 반복해서 저장해도 File 노드가 중복 생성되지
+않습니다.
+
+로컬에서 Neo4j만 실행하고 그래프 제약조건을 초기화합니다.
+
+```bash
+docker compose up -d neo4j
+python scripts/init_neo4j_schema.py
+```
+
+로컬에 checkout한 Java 저장소를 분석하여 코드 그래프를 저장합니다.
+
+```bash
+python scripts/import_code_graph.py \
+  --github-repository-id 1296269 \
+  --repository-path /path/to/repository
+```
+
+백엔드를 호스트에서 실행할 때 `NEO4J_URI=bolt://127.0.0.1:7687`은 실행 중인 컴퓨터의
+로컬 Neo4j를 가리킵니다. 백엔드까지 Docker 컨테이너에서 실행하는 경우에는 Compose 서비스
+이름을 사용하여 `NEO4J_URI=bolt://neo4j:7687`로 설정해야 합니다.
+
+프로젝트 내부 노드로 해석된 파일 간 관계는 Neo4j에 저장됩니다. 후보가 여러 개인 참조는 각
+후보에 `ambiguous=true`로 저장합니다. 대상 노드를 찾지 못한 외부 참조는 mapper 결과에 진단
+정보로 유지하지만 Neo4j에는 저장하지 않으며, import 결과에 제외된 관계 수를 출력합니다.
