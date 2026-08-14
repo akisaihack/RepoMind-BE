@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from app.graph.mappings import map_java_file, resolve_cross_file_references
 from app.graph.repositories.code_graph import CodeGraphRepository
@@ -12,6 +13,7 @@ from app.services.repository_identity import RepositoryIdentity, RepositoryIdent
 @dataclass(frozen=True, slots=True)
 class CodeGraphImportResult:
     github_repository_id: int
+    analysis_run_id: str
     files: int
     packages: int
     classes: int
@@ -66,7 +68,12 @@ class CodeGraphImportService:
             documents.append(map_java_file(github_repository_id, file_result))
 
         document = resolve_cross_file_references(documents)
-        skipped_external = self._graph_repository.save(document)
+        analysis_run_id = uuid4().hex
+        skipped_external = self._graph_repository.save(
+            document,
+            github_repository_id=github_repository_id,
+            analysis_run_id=analysis_run_id,
+        )
 
         counts = {node_type: 0 for node_type in _RESULT_NODE_TYPES}
         for node in document.nodes:
@@ -75,6 +82,7 @@ class CodeGraphImportService:
 
         return CodeGraphImportResult(
             github_repository_id=github_repository_id,
+            analysis_run_id=analysis_run_id,
             files=counts["File"],
             packages=counts["Package"],
             classes=counts["Class"],

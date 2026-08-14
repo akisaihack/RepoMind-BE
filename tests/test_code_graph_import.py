@@ -26,6 +26,10 @@ def test_validates_repository_before_saving(tmp_path) -> None:
     validator.validate.assert_called_once_with(123, tmp_path.resolve(), skip=False)
     callback.assert_called_once_with(identity)
     graph_repository.save.assert_called_once()
+    save_call = graph_repository.save.call_args
+    assert save_call.kwargs["github_repository_id"] == 123
+    assert save_call.kwargs["analysis_run_id"] == result.analysis_run_id
+    assert result.analysis_run_id
     assert result.repository_full_name == "OpenAI/codex"
     assert result.repository_validation_source == "neo4j"
 
