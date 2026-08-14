@@ -342,3 +342,10 @@ python scripts/import_code_graph.py \
 프로젝트 내부 노드로 해석된 파일 간 관계는 Neo4j에 저장됩니다. 후보가 여러 개인 참조는 각
 후보에 `ambiguous=true`로 저장합니다. 대상 노드를 찾지 못한 외부 참조는 mapper 결과에 진단
 정보로 유지하지만 Neo4j에는 저장하지 않으며, import 결과에 제외된 관계 수를 출력합니다.
+
+코드 그래프 import마다 새로운 `analysisRunId`를 생성합니다. 이번 실행에서 확인된 코드 노드와
+관계에 실행 ID를 기록한 뒤, 같은 저장소에서 현재 실행에 포함되지 않은 Package, Class,
+Interface, Method, Endpoint와 코드 관계를 같은 transaction 안에서 정리합니다. GitHub 이력과
+공유하는 File 노드와 `HAS_FILE`, `CHANGED` 관계는 정리하지 않습니다. 기존 데이터에
+`analysisRunId`가 없는 경우에도 최초 재분석에서 현재 코드에 포함된 항목은 표시되고 나머지는
+오래된 코드 그래프로 간주되어 정리됩니다.

@@ -39,14 +39,14 @@ def test_import_order_and_repeated_saves_share_one_file(code_first: bool) -> Non
 
         try:
             if code_first:
-                code_repository.save(code_document)
+                _save_code(code_repository, code_document, "initial")
                 github_repository.save(github_data)
             else:
                 github_repository.save(github_data)
-                code_repository.save(code_document)
+                _save_code(code_repository, code_document, "initial")
 
             github_repository.save(github_data)
-            code_repository.save(code_document)
+            _save_code(code_repository, code_document, "repeated")
 
             records, _, _ = client.execute_query(
                 """
@@ -98,14 +98,94 @@ def test_code_graph_failure_rolls_back_preceding_node_batches() -> None:
         _cleanup(client)
         initialize_graph_schema(client)
         try:
+            code_repository = CodeGraphRepository(client, batch_size=1)
+            _save_code(code_repository, _code_document(), "last-successful-run")
             with pytest.raises(CodeGraphPersistenceError):
-                CodeGraphRepository(client, batch_size=1).save(document)
+                code_repository.save(
+                    document,
+                    github_repository_id=REPOSITORY_ID,
+                    analysis_run_id="failed-run",
+                )
 
             records, _, _ = client.execute_query(
-                "MATCH (file:File {key: $fileKey}) RETURN count(file) AS files",
-                {"fileKey": rollback_file_key},
+                """
+                RETURN
+                    count { (:File {key: $rollbackFileKey}) } AS rolledBackFiles,
+                    count { (:Class {key: $preservedClassKey}) } AS preservedClasses
+                """,
+                {
+                    "rollbackFileKey": rollback_file_key,
+                    "preservedClassKey": CLASS_KEY,
+                },
             )
-            assert records[0]["files"] == 0
+            assert dict(records[0]) == {"rolledBackFiles": 0, "preservedClasses": 1}
+        finally:
+            _cleanup(client)
+
+
+def test_reanalysis_removes_stale_code_but_preserves_github_file_history() -> None:
+    app = create_app()
+    old_method_key = f"{CLASS_KEY}:method:0"
+    renamed_file_key = f"{REPOSITORY_ID}:file:src/RenamedApp.java"
+    renamed_class_key = f"{REPOSITORY_ID}:class:src/RenamedApp.java:0"
+    initial_document = GraphDocument(
+        nodes=(
+            *_code_document().nodes,
+            GraphNode(
+                old_method_key, "Method", {"name": "removed", "githubRepositoryId": REPOSITORY_ID}
+            ),
+        ),
+        edges=(*_code_document().edges, GraphEdge("CONTAINS", CLASS_KEY, old_method_key, {})),
+    )
+    current_document = GraphDocument(
+        nodes=(
+            GraphNode(
+                renamed_file_key,
+                "File",
+                {"path": "src/RenamedApp.java", "githubRepositoryId": REPOSITORY_ID},
+            ),
+            GraphNode(
+                renamed_class_key,
+                "Class",
+                {"name": "RenamedApp", "githubRepositoryId": REPOSITORY_ID},
+            ),
+        ),
+        edges=(GraphEdge("DECLARES", renamed_file_key, renamed_class_key, {}),),
+    )
+
+    with Neo4jClient.from_config(app.config) as client:
+        _cleanup(client)
+        initialize_graph_schema(client)
+        try:
+            github_repository = GitHubHistoryGraphRepository(client)
+            code_repository = CodeGraphRepository(client)
+            github_repository.save(_github_data())
+            _save_code(code_repository, initial_document, "before-rename")
+            _save_code(code_repository, current_document, "after-rename")
+
+            records, _, _ = client.execute_query(
+                """
+                MATCH (commit:Commit {key: $commitKey})-[:CHANGED]->(file:File {key: $fileKey})
+                RETURN
+                    count(file) AS githubFiles,
+                    count { (file)-[:DECLARES]->() } AS declarations,
+                    count { (:Method {key: $methodKey}) } AS staleMethods,
+                    count { (:Class {key: $classKey}) } AS currentClasses
+                """,
+                {
+                    "commitKey": COMMIT_KEY,
+                    "fileKey": FILE_KEY,
+                    "methodKey": old_method_key,
+                    "classKey": renamed_class_key,
+                },
+            )
+
+            assert dict(records[0]) == {
+                "githubFiles": 1,
+                "declarations": 0,
+                "staleMethods": 0,
+                "currentClasses": 1,
+            }
         finally:
             _cleanup(client)
 
@@ -150,6 +230,18 @@ def _code_document() -> GraphDocument:
             ),
         ),
         edges=(GraphEdge("DECLARES", FILE_KEY, CLASS_KEY, {}),),
+    )
+
+
+def _save_code(
+    repository: CodeGraphRepository,
+    document: GraphDocument,
+    analysis_run_id: str,
+) -> None:
+    repository.save(
+        document,
+        github_repository_id=REPOSITORY_ID,
+        analysis_run_id=analysis_run_id,
     )
 
 
