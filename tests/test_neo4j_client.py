@@ -9,6 +9,11 @@ from app.clients.neo4j import Neo4jClient
 
 def test_neo4j_client_creates_driver_and_verifies_connectivity() -> None:
     driver = Mock()
+    session = Mock()
+    driver.session.return_value.__enter__ = Mock(return_value=session)
+    driver.session.return_value.__exit__ = Mock(return_value=None)
+    session.execute_write.return_value = "saved"
+    work = Mock(return_value="saved")
     config = {
         "NEO4J_URI": "neo4j://localhost:7687",
         "NEO4J_USERNAME": "neo4j",
@@ -19,6 +24,7 @@ def test_neo4j_client_creates_driver_and_verifies_connectivity() -> None:
         with Neo4jClient.from_config(config) as client:
             client.verify_connectivity()
             client.execute_query("RETURN $value", {"value": 1})
+            assert client.execute_write(work) == "saved"
 
     create_driver.assert_called_once_with(
         "neo4j://localhost:7687",
@@ -29,6 +35,7 @@ def test_neo4j_client_creates_driver_and_verifies_connectivity() -> None:
         "RETURN $value",
         parameters_={"value": 1},
     )
+    session.execute_write.assert_called_once_with(work)
     driver.close.assert_called_once_with()
 
 

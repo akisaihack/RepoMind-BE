@@ -1,7 +1,9 @@
 """Validated Neo4j persistence for source-code graph documents."""
 
 from collections import defaultdict
+from collections.abc import Iterator
 
+from neo4j import ManagedTransaction
 from neo4j.exceptions import Neo4jError
 
 from app.clients.neo4j import Neo4jClient
@@ -20,6 +22,7 @@ ALLOWED_RELATIONSHIP_TYPES = frozenset(
         "EXPOSES",
     }
 )
+DEFAULT_BATCH_SIZE = 1_000
 
 
 class CodeGraphValidationError(ValueError):
@@ -31,8 +34,11 @@ class CodeGraphPersistenceError(Exception):
 
 
 class CodeGraphRepository:
-    def __init__(self, client: Neo4jClient) -> None:
+    def __init__(self, client: Neo4jClient, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
+        if batch_size <= 0:
+            raise ValueError("Code graph batch size must be positive.")
         self._client = client
+        self._batch_size = batch_size
 
     def save(self, document: GraphDocument) -> int:
         """MERGE internal graph nodes and edges; return skipped external edge count."""
@@ -55,11 +61,21 @@ class CodeGraphRepository:
                 }
             )
 
-        try:
+        if not node_batches and not relationship_batches:
+            return skipped_external
+
+        def _save_in_transaction(transaction: ManagedTransaction) -> None:
+            # Future repository-scoped cleanup belongs at the end of this callback so
+            # graph replacement and stale-node deletion commit or roll back together.
             for label, rows in node_batches.items():
-                self._client.execute_query(_node_query(label), {"rows": rows})
+                for batch in _batches(rows, self._batch_size):
+                    transaction.run(_node_query(label), rows=batch).consume()
             for labels, rows in relationship_batches.items():
-                self._client.execute_query(_relationship_query(*labels), {"rows": rows})
+                for batch in _batches(rows, self._batch_size):
+                    transaction.run(_relationship_query(*labels), rows=batch).consume()
+
+        try:
+            self._client.execute_write(_save_in_transaction)
         except Neo4jError as exc:
             raise CodeGraphPersistenceError("Failed to persist source-code graph.") from exc
 
@@ -101,6 +117,11 @@ class CodeGraphRepository:
                 )
             internal.append(edge)
         return internal, skipped_external
+
+
+def _batches(rows: list[dict], batch_size: int) -> Iterator[list[dict]]:
+    for start in range(0, len(rows), batch_size):
+        yield rows[start : start + batch_size]
 
 
 def _node_query(label: str) -> str:
