@@ -126,3 +126,20 @@ def test_github_client_rejects_missing_configuration() -> None:
                 "GITHUB_REPOSITORY_NAME": "Hello-World",
             }
         )
+
+
+def test_github_client_looks_up_repository_by_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repositories/123"
+        return httpx.Response(200, json={"id": 123, "full_name": "OpenAI/codex"})
+
+    with GitHubClient(
+        "test-token",
+        "configured-owner",
+        "configured-repository",
+        base_url="https://api.github.test",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        repository = client.get_repository_by_id(123)
+
+    assert repository["full_name"] == "OpenAI/codex"

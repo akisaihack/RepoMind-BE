@@ -83,6 +83,16 @@ class GitHubClient:
     def get_repository(self) -> dict[str, Any]:
         return self._get(self._repository_path)
 
+    def get_repository_by_id(self, github_repository_id: int) -> dict[str, Any]:
+        """Look up a repository by its immutable GitHub database ID."""
+        if (
+            not isinstance(github_repository_id, int)
+            or isinstance(github_repository_id, bool)
+            or github_repository_id <= 0
+        ):
+            raise ValueError("GitHub repository ID must be a positive integer.")
+        return self._get(f"/repositories/{github_repository_id}")
+
     def list_branches(self) -> list[dict[str, Any]]:
         return self._get_paginated(f"{self._repository_path}/branches")
 
