@@ -8,7 +8,7 @@ from app import create_app
 from app.clients.neo4j import Neo4jClient
 from app.dtos.graph import GraphDocument, GraphEdge, GraphNode
 from app.graph.models import GitHubGraphData
-from app.graph.repositories.code_graph import CodeGraphRepository
+from app.graph.repositories.code_graph import CodeGraphPersistenceError, CodeGraphRepository
 from app.graph.repositories.github_history import GitHubHistoryGraphRepository
 from app.graph.schema import initialize_graph_schema
 
@@ -66,6 +66,46 @@ def test_import_order_and_repeated_saves_share_one_file(code_first: bool) -> Non
                 {"fileKey": FILE_KEY, "classKey": CLASS_KEY}
             ]
             assert counts[0]["files"] == 1
+        finally:
+            _cleanup(client)
+
+
+def test_code_graph_failure_rolls_back_preceding_node_batches() -> None:
+    app = create_app()
+    rollback_file_key = f"{REPOSITORY_ID}:file:rollback.java"
+    invalid_class_key = f"{REPOSITORY_ID}:class:rollback.java:0"
+    document = GraphDocument(
+        nodes=(
+            GraphNode(
+                rollback_file_key,
+                "File",
+                {"path": "rollback.java", "githubRepositoryId": REPOSITORY_ID},
+            ),
+            GraphNode(
+                invalid_class_key,
+                "Class",
+                {
+                    "name": "Rollback",
+                    "githubRepositoryId": REPOSITORY_ID,
+                    "invalidProperty": {"nested": "maps cannot be node properties"},
+                },
+            ),
+        ),
+        edges=(),
+    )
+
+    with Neo4jClient.from_config(app.config) as client:
+        _cleanup(client)
+        initialize_graph_schema(client)
+        try:
+            with pytest.raises(CodeGraphPersistenceError):
+                CodeGraphRepository(client, batch_size=1).save(document)
+
+            records, _, _ = client.execute_query(
+                "MATCH (file:File {key: $fileKey}) RETURN count(file) AS files",
+                {"fileKey": rollback_file_key},
+            )
+            assert records[0]["files"] == 0
         finally:
             _cleanup(client)
 

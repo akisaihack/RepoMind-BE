@@ -22,16 +22,29 @@ def _document() -> GraphDocument:
     )
 
 
-def test_merges_nodes_before_relationships() -> None:
+def _transactional_client() -> tuple[Mock, Mock]:
     client = Mock()
+    transaction = Mock()
+
+    def execute(work):
+        return work(transaction)
+
+    client.execute_write.side_effect = execute
+    return client, transaction
+
+
+def test_merges_nodes_before_relationships() -> None:
+    client, transaction = _transactional_client()
 
     skipped = CodeGraphRepository(client).save(_document())
 
     assert skipped == 0
-    assert client.execute_query.call_count == 3
-    queries = [call.args[0] for call in client.execute_query.call_args_list]
+    client.execute_write.assert_called_once()
+    assert transaction.run.call_count == 3
+    queries = [call.args[0] for call in transaction.run.call_args_list]
     assert "MERGE (node:File {key: row.key})" in queries[0]
     assert "MERGE (source)-[relation:DECLARES]->(target)" in queries[2]
+    assert transaction.run.return_value.consume.call_count == 3
 
 
 def test_skips_unresolved_external_relationship() -> None:
@@ -41,7 +54,7 @@ def test_skips_unresolved_external_relationship() -> None:
         edges=document.edges
         + (GraphEdge("EXTENDS", document.nodes[1].id, "External", {"external": True}),),
     )
-    client = Mock()
+    client, _ = _transactional_client()
 
     assert CodeGraphRepository(client).save(document) == 1
 
@@ -59,7 +72,58 @@ def test_rejects_unknown_labels_and_relationships() -> None:
 
 def test_converts_neo4j_errors() -> None:
     client = Mock()
-    client.execute_query.side_effect = Neo4jError("down")
+    error = Neo4jError("down")
+    client.execute_write.side_effect = error
 
-    with pytest.raises(CodeGraphPersistenceError, match="source-code graph"):
+    with pytest.raises(CodeGraphPersistenceError, match="source-code graph") as raised:
         CodeGraphRepository(client).save(_document())
+
+    assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize("failure_call", [2, 3])
+def test_node_or_relationship_failure_aborts_the_transaction(failure_call: int) -> None:
+    client, transaction = _transactional_client()
+    error = Neo4jError("batch failed")
+    successful_result = Mock()
+
+    def execute_with_failure(work):
+        results = iter([*[successful_result] * (failure_call - 1), error])
+
+        def run(*args, **kwargs):
+            result = next(results)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        transaction.run.side_effect = run
+        return work(transaction)
+
+    client.execute_write.side_effect = execute_with_failure
+
+    with pytest.raises(CodeGraphPersistenceError) as raised:
+        CodeGraphRepository(client).save(_document())
+
+    assert raised.value.__cause__ is error
+
+
+def test_splits_large_node_batches_inside_one_transaction() -> None:
+    client, transaction = _transactional_client()
+    nodes = tuple(GraphNode(f"100:file:{index}.java", "File", {}) for index in range(5))
+
+    CodeGraphRepository(client, batch_size=2).save(GraphDocument(nodes, ()))
+
+    client.execute_write.assert_called_once()
+    assert [len(call.kwargs["rows"]) for call in transaction.run.call_args_list] == [2, 2, 1]
+
+
+def test_empty_document_does_not_open_transaction() -> None:
+    client = Mock()
+
+    assert CodeGraphRepository(client).save(GraphDocument((), ())) == 0
+    client.execute_write.assert_not_called()
+
+
+def test_rejects_non_positive_batch_size() -> None:
+    with pytest.raises(ValueError, match="batch size"):
+        CodeGraphRepository(Mock(), batch_size=0)

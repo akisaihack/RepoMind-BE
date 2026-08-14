@@ -6,6 +6,7 @@ from pathlib import Path
 from app import create_app
 from app.clients.neo4j import Neo4jClient
 from app.graph.repositories.code_graph import (
+    DEFAULT_BATCH_SIZE,
     CodeGraphPersistenceError,
     CodeGraphRepository,
     CodeGraphValidationError,
@@ -18,15 +19,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--github-repository-id", required=True, type=int)
     parser.add_argument("--repository-path", required=True, type=Path)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help="Rows written per query inside the managed transaction.",
+    )
     args = parser.parse_args()
 
     app = create_app()
     try:
         with Neo4jClient.from_config(app.config) as client:
             initialize_graph_schema(client)
-            result = CodeGraphImportService(CodeGraphRepository(client)).import_repository(
-                args.github_repository_id, args.repository_path
-            )
+            result = CodeGraphImportService(
+                CodeGraphRepository(client, batch_size=args.batch_size)
+            ).import_repository(args.github_repository_id, args.repository_path)
     except (
         CodeGraphPersistenceError,
         CodeGraphValidationError,
