@@ -1,37 +1,96 @@
-"""Tests for Repository API endpoints."""
+"""Repository RDB API tests."""
 
-def test_create_repository(client):
-    """Test creating a new repository analysis request."""
+from uuid import UUID
+
+import pytest
+
+from app.extensions import db
+from app.models.repository import Repository
+
+
+@pytest.fixture(autouse=True)
+def repository_database(app):
+    with app.app_context():
+        db.create_all()
+        yield
+        db.session.remove()
+        db.drop_all()
+
+
+def _create_repository(client, *, branch: str = "develop") -> dict:
     response = client.post(
         "/api/v1/repositories/",
-        json={"repo_url": "https://github.com/owner/repo"}
+        json={
+            "repository_url": "https://github.com/owner/repository.git/",
+            "branch": branch,
+        },
     )
     assert response.status_code == 201
-    
-    data = response.get_json()
-    assert data["success"] is True
-    assert "repo_id" in data["data"]
-    assert data["data"]["status"] == "indexing"
+    return response.get_json()["data"]
 
 
-def test_get_repository_status(client):
-    """Test fetching the status of a repository analysis."""
-    repo_id = "test_repo_123"
-    response = client.get(f"/api/v1/repositories/{repo_id}")
-    assert response.status_code == 200
-    
-    data = response.get_json()
-    assert data["success"] is True
-    assert data["data"]["repo_id"] == repo_id
-    assert data["data"]["status"] == "completed"
-    assert data["data"]["progress_percent"] == 100
+def test_create_repository_persists_pending_registration(client, app) -> None:
+    data = _create_repository(client)
+
+    assert data["repository_url"] == "https://github.com/owner/repository"
+    assert data["branch"] == "develop"
+    assert data["analysis_status"] == "pending"
+    assert data["latest_analyzed_sha"] is None
+
+    with app.app_context():
+        repository = db.session.get(Repository, UUID(data["id"]))
+        assert repository is not None
+        assert repository.repository_url == data["repository_url"]
 
 
-def test_list_repositories(client):
-    """Test listing all registered repositories."""
-    response = client.get("/api/v1/repositories/")
-    assert response.status_code == 200
-    
-    data = response.get_json()
-    assert data["success"] is True
-    assert isinstance(data["data"]["repositories"], list)
+def test_lists_and_gets_registered_repositories(client) -> None:
+    created = _create_repository(client)
+
+    list_response = client.get("/api/v1/repositories/")
+    detail_response = client.get(f"/api/v1/repositories/{created['id']}")
+
+    assert list_response.status_code == 200
+    assert list_response.get_json()["data"]["repositories"] == [created]
+    assert detail_response.status_code == 200
+    assert detail_response.get_json()["data"] == created
+
+
+def test_rejects_duplicate_repository_and_branch(client) -> None:
+    _create_repository(client)
+
+    response = client.post(
+        "/api/v1/repositories/",
+        json={
+            "repository_url": "https://github.com/owner/repository",
+            "branch": "develop",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "REPOSITORY_ALREADY_EXISTS"
+
+
+@pytest.mark.parametrize(
+    "payload, error_code",
+    [
+        ({"repository_url": "http://github.com/owner/repository"}, "INVALID_REPOSITORY_URL"),
+        ({"repository_url": "https://gitlab.com/owner/repository"}, "INVALID_REPOSITORY_URL"),
+        ({"repository_url": "https://github.com/owner"}, "INVALID_REPOSITORY_URL"),
+        (
+            {"repository_url": "https://github.com/owner/repository", "branch": " "},
+            "INVALID_BRANCH",
+        ),
+    ],
+)
+def test_rejects_invalid_repository_registration(client, payload, error_code: str) -> None:
+    response = client.post("/api/v1/repositories/", json=payload)
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == error_code
+
+
+def test_returns_not_found_for_unknown_repository(client) -> None:
+    response = client.get("/api/v1/repositories/6a0a1d1d-7c40-4d17-a8ba-64f82411f995")
+
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "REPOSITORY_NOT_FOUND"
