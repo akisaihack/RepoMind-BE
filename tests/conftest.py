@@ -7,9 +7,14 @@ from flask.testing import FlaskClient
 from app import create_app
 
 
+from app.extensions import db
+
 @pytest.fixture()
 def app() -> Flask:
-    return create_app("testing")
+    app = create_app("testing")
+    with app.app_context():
+        db.create_all()
+    return app
 
 
 @pytest.fixture()
