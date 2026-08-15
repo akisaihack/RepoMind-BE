@@ -24,10 +24,8 @@ from app.responses import success_response
 repositories_bp = Blueprint("repositories", __name__)
 
 
-from app.repositories.memory_store import get_memory_store, InMemoryRepositoryStore
-
-def _get_repository_store() -> InMemoryRepositoryStore:
-    return get_memory_store()
+def _get_repository_store() -> RepositoryStore:
+    return RepositoryStore(db.session)
 
 
 def _normalize_repository_url(value: object) -> str:
@@ -77,13 +75,13 @@ def _parse_repository_id(value: str) -> UUID:
         raise APIError("INVALID_REPOSITORY_ID", "repository_id must be a UUID.") from exc
 
 
-def _to_repository_info(repository: dict) -> RepositoryInfo:
+def _to_repository_info(repository: Repository) -> RepositoryInfo:
     return RepositoryInfo(
-        id=str(repository["id"]),
-        repository_url=repository["repository_url"],
-        branch=repository["branch"],
-        analysis_status=repository["analysis_status"],
-        latest_analyzed_sha=repository["latest_analyzed_sha"],
+        id=str(repository.id),
+        repository_url=repository.repository_url,
+        branch=repository.branch,
+        analysis_status=repository.analysis_status,
+        latest_analyzed_sha=repository.latest_analyzed_sha,
     )
 
 

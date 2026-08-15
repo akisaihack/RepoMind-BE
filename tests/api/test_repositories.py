@@ -5,11 +5,7 @@ from flask import Flask
 from app.repositories.repository import DuplicateRepositoryError
 from app.repositories.memory_store import get_memory_store, InMemoryRepositoryStore
 
-@pytest.fixture(autouse=True)
-def reset_memory_store():
-    """Reset the in-memory store before each test."""
-    store = get_memory_store()
-    store._repositories.clear()
+# No in-memory store reset needed anymore
 
 def test_create_repository_success(client):
     response = client.post(
