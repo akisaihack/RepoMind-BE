@@ -38,21 +38,28 @@ from app.graph.identifiers import file_key, normalize_repository_path, repositor
 # (드물지만) 항상 유일한 id가 나오기 때문. Package/Endpoint id만 이름 기반인데,
 # 이건 의도적임 — 같은 패키지/엔드포인트가 여러 파일에 걸쳐 나올 때 자동으로
 # 같은 노드로 합쳐지길 원해서(Neo4j MERGE 기준 키 역할).
+#
+# class_node_id/method_node_id는 app/services/chunking.py에서도 그대로
+# 재사용함 — 청크의 graph_node_id를 여기 Method 노드 id와 항상 동일하게
+# 맞추기 위해 공개 함수로 둠(비공개로 감추면 chunking.py가 같은 포맷을
+# 따로 만들어야 해서 나중에 두 곳이 어긋날 위험이 생김).
 
 
 def _package_node_id(github_repository_id: int, package_name: str) -> str:
     return repository_scoped_key(github_repository_id, "package", package_name)
 
 
-def _class_node_id(
+def class_node_id(
     github_repository_id: int, file_path: str, class_index: int, node_type: str
 ) -> str:
+    """Class/Interface 노드 id. node_type은 대소문자 상관없이 소문자로 씀."""
     return repository_scoped_key(
         github_repository_id, node_type.lower(), f"{file_path}:{class_index}"
     )
 
 
-def _method_node_id(class_id: str, method_index: int) -> str:
+def method_node_id(class_id: str, method_index: int) -> str:
+    """Method 노드 id. class_node_id()로 만든 class_id에 이어붙이는 구조."""
     return f"{class_id}:method:{method_index}"
 
 
@@ -234,7 +241,7 @@ def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> Gra
 
     for class_index, class_result in enumerate(file_result.classes):
         node_type = "Interface" if class_result.kind == "interface" else "Class"
-        class_id = _class_node_id(github_repository_id, normalized_path, class_index, node_type)
+        class_id = class_node_id(github_repository_id, normalized_path, class_index, node_type)
         nodes.append(
             _build_class_node(class_id, class_result, normalized_path, github_repository_id)
         )
@@ -262,7 +269,7 @@ def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> Gra
             edges.append(manages_edge)
 
         for method_index, method_result in enumerate(class_result.methods):
-            method_id = _method_node_id(class_id, method_index)
+            method_id = method_node_id(class_id, method_index)
             nodes.append(
                 _build_method_node(method_id, method_result, class_result, github_repository_id)
             )

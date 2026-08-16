@@ -15,6 +15,13 @@ SAMPLE_REPO_PATH = Path(
 )
 OUTPUT_PATH = Path(__file__).resolve().parent / "chunking_output.json"
 
+# 더미값이 아니라 실제 GitHub 저장소(callicoder/spring-security-react-ant-design
+# -polls-app)의 실제 값. graph_node_id/File 노드 key가 이 repository id를
+# 그대로 쓰기 때문에, 나중에 이 샘플 저장소의 GitHub 이력을 실제로 수집하면
+# Repository/Commit 노드와 곧바로 연결됨.
+SAMPLE_GITHUB_REPOSITORY_ID = 123231656  # github.com/callicoder/spring-security-react-ant-design-polls-app
+SAMPLE_COMMIT_HASH = "362fad90cab17e76453b3b9e273c594de6ee3d7f"  # 로컬 체크아웃된 master HEAD
+
 
 def main() -> None:
     java_files = sorted(SAMPLE_REPO_PATH.rglob("*.java"))
@@ -28,7 +35,9 @@ def main() -> None:
         source_bytes = file_path.read_bytes().replace(b"\r\n", b"\n")
         relative_path = file_path.relative_to(SAMPLE_REPO_PATH).as_posix()
         file_result = parse_java_file(relative_path, source_bytes)
-        chunks.extend(build_chunks_from_file(file_result))
+        chunks.extend(
+            build_chunks_from_file(SAMPLE_GITHUB_REPOSITORY_ID, file_result, SAMPLE_COMMIT_HASH)
+        )
 
     output = [dataclasses.asdict(chunk) for chunk in chunks]
     OUTPUT_PATH.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
