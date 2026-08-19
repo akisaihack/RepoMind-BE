@@ -7,12 +7,14 @@ from uuid import UUID
 
 from flask import Blueprint, request
 
+from app.dtos.analysis import AnalysisRequest
 from app.dtos.repositories import (
     RepositoryCreateRequest,
     RepositoryInfo,
 )
 from app.errors import APIError
 from app.extensions import db
+from app.jobs.dispatcher import AnalysisJobDispatcher, NoOpAnalysisJobDispatcher
 from app.models.repository import Repository
 from app.repositories.repository import (
     DuplicateRepositoryError,
@@ -85,6 +87,9 @@ def _to_repository_info(repository: Repository) -> RepositoryInfo:
     )
 
 
+def _get_dispatcher() -> AnalysisJobDispatcher:
+    return NoOpAnalysisJobDispatcher()
+
 @repositories_bp.post("/")
 def create_repository():
     """Persist a repository registration in the pending state."""
@@ -103,6 +108,16 @@ def create_repository():
             repository_url=create_request.repository_url,
             branch=create_request.branch,
         )
+        
+        # Dispatch background analysis job
+        dispatcher = _get_dispatcher()
+        dispatcher.dispatch(
+            AnalysisRequest(
+                repository_id=repository.id,
+                repository_url=repository.repository_url,
+                branch=repository.branch,
+            )
+        )
     except DuplicateRepositoryError as exc:
         raise APIError(
             "REPOSITORY_ALREADY_EXISTS",
@@ -114,6 +129,15 @@ def create_repository():
             "REPOSITORY_PERSISTENCE_FAILED",
             "Repository registration could not be completed.",
             status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+    except Exception as exc:
+        # If dispatch fails, the repo was created but job didn't start.
+        # We should probably still return 201 or 500 depending on requirements.
+        # For now, let it bubble up or handle specifically if needed.
+        raise APIError(
+            "ANALYSIS_DISPATCH_FAILED",
+            "Repository was registered but analysis job failed to start.",
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
         ) from exc
 
     return success_response(asdict(_to_repository_info(repository)), status=HTTPStatus.CREATED)

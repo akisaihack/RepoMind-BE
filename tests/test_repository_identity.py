@@ -48,7 +48,7 @@ def test_reads_origin_remote_from_requested_checkout() -> None:
         assert get_origin_url(Path("/repo")) == "git@github.com:OpenAI/codex.git"
 
     run.assert_called_once_with(
-        ["git", "-C", "/repo", "remote", "get-url", "origin"],
+        ["git", "-C", str(Path("/repo")), "remote", "get-url", "origin"],
         check=True,
         capture_output=True,
         text=True,
