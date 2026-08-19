@@ -29,38 +29,26 @@ from collections.abc import Iterable
 
 from app.dtos.analysis import JavaClassResult, JavaFileResult, JavaMethodResult
 from app.dtos.graph import GraphDocument, GraphEdge, GraphNode
-from app.graph.identifiers import file_key, normalize_repository_path, repository_scoped_key
+from app.graph.identifiers import (
+    class_key,
+    constructor_key,
+    file_key,
+    java_qualified_name,
+    method_key,
+    normalize_repository_path,
+    repository_scoped_key,
+)
 
 # ---------- 노드 ID 생성 ----------
 #
-# 이름 기반(예: 패키지+클래스명) 대신 "파일 안에서 몇 번째 클래스/메서드인지"
-# 인덱스 기반으로 id를 만듦. 같은 파일 안에 이름이 겹치는 중첩 클래스가 있어도
-# (드물지만) 항상 유일한 id가 나오기 때문. Package/Endpoint id만 이름 기반인데,
-# 이건 의도적임 — 같은 패키지/엔드포인트가 여러 파일에 걸쳐 나올 때 자동으로
-# 같은 노드로 합쳐지길 원해서(Neo4j MERGE 기준 키 역할).
-#
-# class_node_id/method_node_id는 app/services/chunking.py에서도 그대로
-# 재사용함 — 청크의 graph_node_id를 여기 Method 노드 id와 항상 동일하게
-# 맞추기 위해 공개 함수로 둠(비공개로 감추면 chunking.py가 같은 포맷을
-# 따로 만들어야 해서 나중에 두 곳이 어긋날 위험이 생김).
+# Class/Interface는 정규화된 파일 경로와 FQN, Method는 소속 Class ID와
+# 이름/파라미터 시그니처로 식별한다. 선언 순서와 라인 이동은 ID에 영향을
+# 주지 않는다. 실제 포맷은 graph.identifiers의 공통 함수를 사용해 청크의
+# graph_node_id와 항상 일치시킨다.
 
 
 def _package_node_id(github_repository_id: int, package_name: str) -> str:
     return repository_scoped_key(github_repository_id, "package", package_name)
-
-
-def class_node_id(
-    github_repository_id: int, file_path: str, class_index: int, node_type: str
-) -> str:
-    """Class/Interface 노드 id. node_type은 대소문자 상관없이 소문자로 씀."""
-    return repository_scoped_key(
-        github_repository_id, node_type.lower(), f"{file_path}:{class_index}"
-    )
-
-
-def method_node_id(class_id: str, method_index: int) -> str:
-    """Method 노드 id. class_node_id()로 만든 class_id에 이어붙이는 구조."""
-    return f"{class_id}:method:{method_index}"
 
 
 def _endpoint_node_id(github_repository_id: int, http_method: str, path: str) -> str:
@@ -81,6 +69,7 @@ def _build_package_node(github_repository_id: int, package_name: str) -> GraphNo
 def _build_class_node(
     class_id: str,
     class_result: JavaClassResult,
+    qualified_name: str,
     file_path: str,
     github_repository_id: int,
 ) -> GraphNode:
@@ -90,10 +79,13 @@ def _build_class_node(
         type=node_type,
         properties={
             "name": class_result.name,
+            "qualified_name": qualified_name,
             "layer": class_result.layer,
             "path": file_path,
             "githubRepositoryId": github_repository_id,
-            "fields": [{"name": field.name, "type": field.type} for field in class_result.fields],
+            # Neo4j properties cannot contain maps; keep field metadata as a
+            # primitive string array that can be stored and queried directly.
+            "fields": [f"{field.type} {field.name}" for field in class_result.fields],
         },
     )
 
@@ -102,6 +94,7 @@ def _build_method_node(
     method_id: str,
     method_result: JavaMethodResult,
     class_result: JavaClassResult,
+    class_qualified_name: str,
     github_repository_id: int,
 ) -> GraphNode:
     properties: dict = {
@@ -112,6 +105,7 @@ def _build_method_node(
         "end_line": method_result.end_line,
         # CALLS 해석 시 "이 메서드가 어느 클래스 소속인지" 역참조하는 용도
         "class_name": class_result.name,
+        "class_qualified_name": class_qualified_name,
         "githubRepositoryId": github_repository_id,
     }
     if method_result.api_mapping:
@@ -239,11 +233,24 @@ def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> Gra
         package_id = _package_node_id(github_repository_id, file_result.package)
         nodes.append(_build_package_node(github_repository_id, file_result.package))
 
-    for class_index, class_result in enumerate(file_result.classes):
+    for class_result in file_result.classes:
         node_type = "Interface" if class_result.kind == "interface" else "Class"
-        class_id = class_node_id(github_repository_id, normalized_path, class_index, node_type)
+        if not class_result.name:
+            raise ValueError(f"Unnamed Java declaration in {normalized_path}.")
+        qualified_name = class_result.qualified_name or java_qualified_name(
+            file_result.package, (), class_result.name
+        )
+        class_id = class_key(
+            github_repository_id, normalized_path, node_type, qualified_name
+        )
         nodes.append(
-            _build_class_node(class_id, class_result, normalized_path, github_repository_id)
+            _build_class_node(
+                class_id,
+                class_result,
+                qualified_name,
+                normalized_path,
+                github_repository_id,
+            )
         )
         edges.append(
             GraphEdge(
@@ -268,10 +275,25 @@ def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> Gra
         if manages_edge:
             edges.append(manages_edge)
 
-        for method_index, method_result in enumerate(class_result.methods):
-            method_id = method_node_id(class_id, method_index)
+        for method_result in class_result.methods:
+            if not method_result.name:
+                raise ValueError(f"Unnamed Java method in {qualified_name}.")
+            if method_result.is_constructor:
+                method_id = constructor_key(
+                    class_id, class_result.name, method_result.param_signature
+                )
+            else:
+                method_id = method_key(
+                    class_id, method_result.name, method_result.param_signature
+                )
             nodes.append(
-                _build_method_node(method_id, method_result, class_result, github_repository_id)
+                _build_method_node(
+                    method_id,
+                    method_result,
+                    class_result,
+                    qualified_name,
+                    github_repository_id,
+                )
             )
             edges.append(_build_contains_edge(class_id, method_id))
             edges.extend(_build_calls_edges(method_id, method_result, class_result))
@@ -308,21 +330,31 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
         all_nodes.extend(document.nodes)
         all_edges.extend(document.edges)
 
-    method_index: dict[str, list[str]] = {}
-    class_index: dict[str, list[str]] = {}
-    method_class_name: dict[str, str] = {}
+    methods_by_name: dict[str, list[str]] = {}
+    classes_by_name: dict[str, list[str]] = {}
+    classes_by_fqn: dict[str, list[str]] = {}
+    method_class_names: dict[str, set[str]] = {}
     for node in all_nodes:
         name = node.properties.get("name")
         if node.type == "Method":
-            class_name = node.properties.get("class_name")
-            if class_name:
-                method_class_name[node.id] = class_name
+            class_names = {
+                value
+                for value in (
+                    node.properties.get("class_name"),
+                    node.properties.get("class_qualified_name"),
+                )
+                if value
+            }
+            method_class_names[node.id] = class_names
         if not name:
             continue
         if node.type == "Method":
-            method_index.setdefault(name, []).append(node.id)
+            methods_by_name.setdefault(name, []).append(node.id)
         elif node.type in ("Class", "Interface"):
-            class_index.setdefault(name, []).append(node.id)
+            classes_by_name.setdefault(name, []).append(node.id)
+            qualified_name = node.properties.get("qualified_name")
+            if qualified_name:
+                classes_by_fqn.setdefault(qualified_name, []).append(node.id)
 
     resolved_edges: list[GraphEdge] = []
     for edge in all_edges:
@@ -331,22 +363,26 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
             continue
 
         if edge.type == "CALLS":
-            candidates = method_index.get(edge.target, [])
+            candidates = methods_by_name.get(edge.target, [])
             # 리시버 타입을 알면(필드 타입 매칭 등) 그 타입 소속 메서드로 후보를 좁힘.
             # 좁혔더니 하나도 안 남으면(타입을 잘못 짚었거나 상속받은 메서드 등)
             # 원래 후보 목록으로 되돌아감 — 안 좁히는 것보다는 넓게라도 남기는 게 나음.
             receiver_type = edge.properties.get("receiver_type")
             if receiver_type and candidates:
                 narrowed = [
-                    cid for cid in candidates if method_class_name.get(cid) == receiver_type
+                    cid for cid in candidates if receiver_type in method_class_names.get(cid, set())
                 ]
                 if narrowed:
                     candidates = narrowed
         elif edge.type == "IMPORTS":
             simple_name = edge.target.rsplit(".", 1)[-1]
-            candidates = class_index.get(simple_name, [])
+            candidates = classes_by_fqn.get(edge.target, []) or classes_by_name.get(
+                simple_name, []
+            )
         else:  # EXTENDS / IMPLEMENTS / MANAGES
-            candidates = class_index.get(edge.target, [])
+            candidates = classes_by_fqn.get(edge.target, []) or classes_by_name.get(
+                edge.target, []
+            )
 
         if not candidates:
             resolved_edges.append(

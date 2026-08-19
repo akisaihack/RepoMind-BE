@@ -5,7 +5,7 @@ app/services/chunking.py가 이 형태로 결과를 반환함. 청크 하나는 
 문자열이고, 나머지는 검색 결과를 보여줄 때/필터링할 때 쓰는 메타데이터.
 
 graph_node_id는 app/graph/mappings.py가 만드는 Method 노드 id와 항상
-동일한 값(같은 class_index/method_index, 같은 id 공식을 재사용해서 계산함).
+동일한 값(같은 Class FQN/Method signature 기반 공통 ID 공식을 사용함).
 이 값으로 pgvector 검색 결과를 Neo4j의 Method 노드로 바로 연결할 수 있음
 (Hybrid RAG의 "벡터로 시작점 찾고 그래프로 깊이 탐색" 구조의 핵심 다리).
 

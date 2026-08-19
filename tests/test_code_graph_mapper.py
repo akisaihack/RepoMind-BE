@@ -1,11 +1,11 @@
 """Repository-scoped Java code graph mapping tests."""
 
-from app.dtos.analysis import JavaClassResult, JavaFileResult, JavaMethodResult
+from app.dtos.analysis import FieldResult, JavaClassResult, JavaFileResult, JavaMethodResult
 from app.graph.mappings import map_java_file, resolve_cross_file_references
 
 
 def _map(repository_id: int, path: str = "src/App.java"):
-    method = JavaMethodResult("name", "", False, 1, 1, "", None, ())
+    method = JavaMethodResult("name", "()", False, 1, 1, "", None, ())
     classes = (
         JavaClassResult("Named", "interface", "Other", None, (), (), (), (method,)),
         JavaClassResult("App", "class", "Other", None, (), ("Named",), (), (method,)),
@@ -43,3 +43,27 @@ def test_deduplicates_shared_package_when_resolving_project() -> None:
 
     packages = [node for node in resolved.nodes if node.type == "Package"]
     assert len(packages) == 1
+
+
+def test_class_fields_use_neo4j_compatible_primitive_values() -> None:
+    result = JavaFileResult(
+        "src/App.java",
+        "com.example",
+        (),
+        (
+            JavaClassResult(
+                "App",
+                "class",
+                "Other",
+                None,
+                (),
+                (),
+                (FieldResult("repository", "OrderRepository"),),
+                (),
+            ),
+        ),
+    )
+
+    class_node = next(node for node in map_java_file(100, result).nodes if node.type == "Class")
+
+    assert class_node.properties["fields"] == ["OrderRepository repository"]
