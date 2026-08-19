@@ -6,6 +6,7 @@ import 해석 등)는 다루지 않음 — 그건 app/graph/mappings.py의 책�
 """
 
 from dataclasses import dataclass
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,3 +94,17 @@ class JavaFileResult:
     package: str | None
     imports: tuple[str, ...]
     classes: tuple[JavaClassResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisRequest:
+    repository_id: UUID
+    repository_url: str
+    branch: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisFailureInfo:
+    error_code: str
+    message: str
+
