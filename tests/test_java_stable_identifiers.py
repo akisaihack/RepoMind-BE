@@ -45,8 +45,8 @@ def test_declaration_reordering_keeps_class_and_method_ids() -> None:
         """
     )
 
-    before_ids = {node.id for node in map_java_file(100, before).nodes}
-    after_ids = {node.id for node in map_java_file(100, after).nodes}
+    before_ids = {node.id for node in map_java_file(100, before, "abc123").nodes}
+    after_ids = {node.id for node in map_java_file(100, after, "abc123").nodes}
 
     stable_ids = {node_id for node_id in before_ids if "First" in node_id or "Target" in node_id}
     assert stable_ids <= after_ids
@@ -61,10 +61,10 @@ def test_overloads_nested_classes_and_repositories_do_not_collide() -> None:
         """
     )
 
-    first_ids = {node.id for node in map_java_file(100, result).nodes}
-    second_ids = {node.id for node in map_java_file(101, result).nodes}
+    first_ids = {node.id for node in map_java_file(100, result, "abc123").nodes}
+    second_ids = {node.id for node in map_java_file(101, result, "abc123").nodes}
 
-    assert len(first_ids) == len(map_java_file(100, result).nodes)
+    assert len(first_ids) == len(map_java_file(100, result, "abc123").nodes)
     assert first_ids.isdisjoint(second_ids)
 
 
@@ -75,8 +75,10 @@ def test_graph_methods_and_chunks_share_exact_ids() -> None:
         class Sample { Sample(String value) {} void save() {} void save(int value) {} }
         """
     )
-    document = map_java_file(100, result)
+    document = map_java_file(100, result, "abc123")
     chunks = build_chunks_from_file(100, result, "abc123")
 
     method_ids = {node.id for node in document.nodes if node.type == "Method"}
-    assert method_ids == {chunk.graph_node_id for chunk in chunks}
+    version_ids = {node.id for node in document.nodes if node.type == "MethodVersion"}
+    assert method_ids == {chunk.method_node_id for chunk in chunks}
+    assert version_ids == {chunk.graph_node_id for chunk in chunks}

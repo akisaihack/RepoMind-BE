@@ -50,8 +50,9 @@ flowchart TD
 
 - 테이블: `code_chunks` (마이그레이션 `migrations/versions/20260816_01_create_code_chunks.py`)
 - 모델: `app/models/code_chunk.py`
-- 컬럼: `graph_node_id`(Neo4j Method 노드 id와 100% 동일), `github_repository_id`,
-  `commit_hash`, `text`, `embedding vector(1536)`, `path`, `class_name`,
+- 컬럼: `graph_node_id`(Neo4j MethodVersion key와 동일), `method_node_id`
+  (논리 Method key), `content_hash`, `github_repository_id`, `commit_hash`,
+  `text`, `embedding vector(1536)`, `path`, `class_name`,
   `method_name`, `layer`, `api_http_method`, `api_path` 등
 - 저장 로직: `app/repositories/code_chunk.py`(`CodeChunkRepository.upsert_chunks`),
   오케스트레이션: `app/services/chunk_import.py`(`ChunkImportService`),
@@ -72,10 +73,13 @@ flowchart TD
   `class_key`/`method_key`/`constructor_key`를 chunking.py와 공유)
 - 저장: `app/graph/repositories/code_graph.py`(`CodeGraphRepository.save`)
 - 오케스트레이션: `app/services/code_graph_import.py`(`CodeGraphImportService`)
-- 실행: `scripts/import_code_graph.py --github-repository-id ID --repository-path PATH [--skip-repository-validation]`
-- 노드 타입: `File`, `Package`, `Class`, `Interface`, `Method`, `Endpoint`
-- 엣지 타입: `DECLARES`, `CONTAINS`, `CALLS`, `EXTENDS`, `IMPLEMENTS`, `IMPORTS`,
-  `MANAGES`, `EXPOSES`
+- 실행: `scripts/import_code_graph.py --github-repository-id ID --repository-path PATH --commit-hash SHA [--skip-repository-validation]`
+- 노드 타입: `File`, `Package`, `Class`, `Interface`, `Method`, `MethodVersion`, `Endpoint`
+- Method는 논리 식별자이며 소스가 변경된 경우에만 content hash 기반
+  MethodVersion을 추가함
+- 엣지 타입: `DECLARES`, `CONTAINS`, `HAS_VERSION`, `INTRODUCED_IN`, `DELETED_IN`,
+  `CALLS`, `EXTENDS`, `IMPLEMENTS`, `IMPORTS`, `MANAGES`, `EXPOSES`
+- CALLS는 `(MethodVersion)-[:CALLS]->(Method)` 형태로 특정 코드 버전의 호출을 표현함
 - **아직 없는 것: 조회(탐색) 로직.** Cypher로 "이 노드에서 CALLS를 N단계
   따라가기" 같은 쿼리 함수가 아직 없음. `Graph Retriever` 노드에서 새로
   작성해야 함.

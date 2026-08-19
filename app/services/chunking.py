@@ -18,7 +18,9 @@ from app.graph.identifiers import (
     class_key,
     constructor_key,
     java_qualified_name,
+    method_content_hash,
     method_key,
+    method_version_key,
     normalize_repository_path,
 )
 
@@ -81,10 +83,14 @@ def build_chunks_from_file(
                 if method_result.is_constructor
                 else method_key(class_id, method_result.name, method_result.param_signature)
             )
+            content_hash = method_content_hash(method_result.text)
+            version_node_id = method_version_key(graph_node_id, content_hash)
             chunks.append(
                 CodeChunk(
-                    id=_chunk_id(graph_node_id),
-                    graph_node_id=graph_node_id,
+                    id=_chunk_id(version_node_id),
+                    graph_node_id=version_node_id,
+                    method_node_id=graph_node_id,
+                    content_hash=content_hash,
                     text=_build_chunk_text(
                         file_result.package, class_result.name, class_result.layer, method_result
                     ),

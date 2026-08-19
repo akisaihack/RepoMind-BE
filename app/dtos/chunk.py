@@ -4,9 +4,9 @@ app/services/chunking.py가 이 형태로 결과를 반환함. 청크 하나는 
 또는 생성자 하나에 대응함(메서드 단위 청킹). text 필드가 실제로 임베딩할
 문자열이고, 나머지는 검색 결과를 보여줄 때/필터링할 때 쓰는 메타데이터.
 
-graph_node_id는 app/graph/mappings.py가 만드는 Method 노드 id와 항상
-동일한 값(같은 Class FQN/Method signature 기반 공통 ID 공식을 사용함).
-이 값으로 pgvector 검색 결과를 Neo4j의 Method 노드로 바로 연결할 수 있음
+graph_node_id는 app/graph/mappings.py가 만드는 MethodVersion 노드 id와
+동일한 값이고, method_node_id는 안정적인 논리 Method id임.
+이 값으로 pgvector 검색 결과를 Neo4j의 정확한 코드 버전으로 연결할 수 있음
 (Hybrid RAG의 "벡터로 시작점 찾고 그래프로 깊이 탐색" 구조의 핵심 다리).
 
 github_repository_id/commit_hash는 이 청크가 어느 저장소, 어느 커밋 시점의
@@ -25,7 +25,9 @@ class CodeChunk:
     """메서드/생성자 하나에 대응하는 코드 청크."""
 
     id: str
-    graph_node_id: str  # Neo4j Method 노드 id와 동일 (app/graph/mappings.py 공식 재사용)
+    graph_node_id: str  # Neo4j MethodVersion 노드 id와 동일
+    method_node_id: str  # 안정적인 Neo4j Method 논리 노드 id
+    content_hash: str
     text: str  # 임베딩 대상 텍스트 (문맥 헤더 + 실제 소스코드)
     path: str
     github_repository_id: int  # 실제 GitHub 저장소 id (더미값 금지)
