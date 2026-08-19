@@ -48,6 +48,16 @@ class RepositoryStore:
         except SQLAlchemyError as exc:
             raise RepositoryPersistenceError("Failed to retrieve repository.") from exc
 
+    def delete(self, repository_id: UUID) -> None:
+        repository = self.get(repository_id)
+        if repository:
+            try:
+                self._session.delete(repository)
+                self._session.commit()
+            except SQLAlchemyError as exc:
+                self._session.rollback()
+                raise RepositoryPersistenceError("Failed to delete repository.") from exc
+
     def list(self) -> list[Repository]:
         statement = select(Repository).order_by(Repository.updated_at.desc())
         try:
@@ -62,6 +72,8 @@ class RepositoryStore:
             ("pending", "indexing"),
             ("indexing", "ready"),
             ("indexing", "failed"),
+            ("failed", "pending"),
+            ("ready", "pending"),
         }
 
         if (from_status, to_status) not in valid_transitions:
