@@ -14,7 +14,7 @@ from app.dtos.repositories import (
 )
 from app.errors import APIError
 from app.extensions import db
-from app.jobs.dispatcher import AnalysisJobDispatcher, NoOpAnalysisJobDispatcher
+from app.jobs.dispatcher import AnalysisJobDispatcher
 from app.models.repository import Repository
 from app.repositories.repository import (
     DuplicateRepositoryError,
@@ -88,7 +88,9 @@ def _to_repository_info(repository: Repository) -> RepositoryInfo:
 
 
 def _get_dispatcher() -> AnalysisJobDispatcher:
-    return NoOpAnalysisJobDispatcher()
+    from flask import current_app
+    from app.jobs.dispatcher import ThreadAnalysisJobDispatcher
+    return ThreadAnalysisJobDispatcher(current_app._get_current_object())
 
 @repositories_bp.post("/")
 def create_repository():
