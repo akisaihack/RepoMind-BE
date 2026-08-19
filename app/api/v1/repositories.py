@@ -14,7 +14,7 @@ from app.dtos.repositories import (
 )
 from app.errors import APIError
 from app.extensions import db
-from app.jobs.dispatcher import AnalysisJobDispatcher, NoOpAnalysisJobDispatcher
+from app.jobs.dispatcher import AnalysisJobDispatcher
 from app.models.repository import Repository
 from app.repositories.repository import (
     DuplicateRepositoryError,
@@ -88,7 +88,9 @@ def _to_repository_info(repository: Repository) -> RepositoryInfo:
 
 
 def _get_dispatcher() -> AnalysisJobDispatcher:
-    return NoOpAnalysisJobDispatcher()
+    from flask import current_app
+    from app.jobs.dispatcher import ThreadAnalysisJobDispatcher
+    return ThreadAnalysisJobDispatcher(current_app._get_current_object())
 
 @repositories_bp.post("/")
 def create_repository():
@@ -183,3 +185,61 @@ def list_repositories():
     return success_response(
         {"repositories": [asdict(_to_repository_info(repository)) for repository in repositories]}
     )
+@repositories_bp.delete("/<repo_id>")
+def delete_repository(repo_id: str):
+    """Delete a repository registration."""
+    repository_id = _parse_repository_id(repo_id)
+    try:
+        _get_repository_store().delete(repository_id)
+    except RepositoryPersistenceError as exc:
+        raise APIError(
+            "REPOSITORY_DELETION_FAILED",
+            "Failed to delete repository.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    return "", HTTPStatus.NO_CONTENT
+
+
+@repositories_bp.post("/<repo_id>/retry")
+def retry_analysis(repo_id: str):
+    """Retry analysis for a failed or ready repository."""
+    repository_id = _parse_repository_id(repo_id)
+    store = _get_repository_store()
+    
+    try:
+        repository = store.get(repository_id)
+        if repository is None:
+            raise APIError(
+                "REPOSITORY_NOT_FOUND",
+                "The requested repository does not exist.",
+                status=HTTPStatus.NOT_FOUND,
+            )
+
+        if repository.analysis_status not in ("failed", "ready"):
+            raise APIError(
+                "INVALID_STATE_TRANSITION",
+                f"Cannot retry analysis from state '{repository.analysis_status}'.",
+                status=HTTPStatus.BAD_REQUEST,
+            )
+
+        repository = store.transition_status(
+            repository_id, repository.analysis_status, "pending"
+        )
+        
+        dispatcher = _get_dispatcher()
+        dispatcher.dispatch(
+            AnalysisRequest(
+                repository_id=repository.id,
+                repository_url=repository.repository_url,
+                branch=repository.branch,
+            )
+        )
+    except RepositoryPersistenceError as exc:
+        raise APIError(
+            "REPOSITORY_PERSISTENCE_FAILED",
+            "Failed to transition repository for retry.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    return success_response(asdict(_to_repository_info(repository)), status=HTTPStatus.ACCEPTED)

@@ -10,6 +10,7 @@ from app.services.github_history import GitHubHistoryCollector
 
 @dataclass(frozen=True, slots=True)
 class GitHubHistoryImportResult:
+    repository_id: int
     repository: str
     branches: int
     issues: int
@@ -42,6 +43,7 @@ class GitHubHistoryImportService:
         self._graph_repository.save(graph_data)
 
         return GitHubHistoryImportResult(
+            repository_id=history.repository.id,
             repository=history.repository.full_name,
             branches=len(history.branches),
             issues=len(history.issues),

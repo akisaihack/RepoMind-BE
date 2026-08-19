@@ -27,7 +27,7 @@ def upgrade() -> None:
     # 로컬 docker는 docker/postgres/init.sql이 컨테이너 생성 시 자동으로
     # 켜주지만, 원격/공유 DB(team2db 등)는 아무도 켜준 적이 없을 수 있어서
     # 여기서 명시적으로 활성화함. 이미 켜져 있으면 IF NOT EXISTS라 안전함.
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    # op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     op.create_table(
         "code_chunks",
