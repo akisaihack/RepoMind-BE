@@ -14,36 +14,18 @@ app/graph/mappings.py와 대응 관계: mappings.py는 같은 파싱 결과를 �
 
 from app.dtos.analysis import JavaFileResult, JavaMethodResult
 from app.dtos.chunk import CodeChunk
-from app.graph.identifiers import normalize_repository_path
-from app.graph.mappings import class_node_id, method_node_id
+from app.graph.identifiers import (
+    class_key,
+    constructor_key,
+    java_qualified_name,
+    method_key,
+    normalize_repository_path,
+)
 
 
-def _chunk_id(file_path: str, class_index: int, method_index: int) -> str:
-    """파일 안에서 몇 번째 클래스/메서드인지로 결정적 id를 만듦.
-
-    app/graph/mappings.py의 노드 id 규칙과 동일한 방식 — 이름이 겹쳐도
-    항상 유일하고, 나중에 그래프 쪽 Method 노드 id(`Method::{class_id}::
-    {method_index}`)와 같은 인덱스를 공유하므로 청크<->그래프 노드를
-    맞춰보기 쉬움.
-    """
-    return f"Chunk::{file_path}::{class_index}::{method_index}"
-
-
-def _graph_node_id(
-    github_repository_id: int,
-    normalized_path: str,
-    class_index: int,
-    class_kind: str,
-    method_index: int,
-) -> str:
-    """app/graph/mappings.py가 Method 노드에 부여하는 id를 그대로 재계산.
-
-    class_index/method_index가 항상 같은 순서(enumerate)로 나오기 때문에,
-    이 값은 실제 Neo4j Method 노드 id와 100% 동일함 — 별도로 조회할 필요
-    없이 계산만으로 그래프 노드를 가리킬 수 있음.
-    """
-    class_id = class_node_id(github_repository_id, normalized_path, class_index, class_kind)
-    return method_node_id(class_id, method_index)
+def _chunk_id(graph_node_id: str) -> str:
+    """Build a stable chunk id from the Method node it represents."""
+    return f"Chunk::{graph_node_id}"
 
 
 def _build_chunk_text(
@@ -81,18 +63,28 @@ def build_chunks_from_file(
     chunks: list[CodeChunk] = []
     normalized_path = normalize_repository_path(file_result.path)
 
-    for class_index, class_result in enumerate(file_result.classes):
-        for method_index, method_result in enumerate(class_result.methods):
+    for class_result in file_result.classes:
+        if not class_result.name:
+            raise ValueError(f"Unnamed Java declaration in {normalized_path}.")
+        qualified_name = class_result.qualified_name or java_qualified_name(
+            file_result.package, (), class_result.name
+        )
+        node_type = "interface" if class_result.kind == "interface" else "class"
+        class_id = class_key(
+            github_repository_id, normalized_path, node_type, qualified_name
+        )
+        for method_result in class_result.methods:
+            if not method_result.name:
+                raise ValueError(f"Unnamed Java method in {qualified_name}.")
+            graph_node_id = (
+                constructor_key(class_id, class_result.name, method_result.param_signature)
+                if method_result.is_constructor
+                else method_key(class_id, method_result.name, method_result.param_signature)
+            )
             chunks.append(
                 CodeChunk(
-                    id=_chunk_id(normalized_path, class_index, method_index),
-                    graph_node_id=_graph_node_id(
-                        github_repository_id,
-                        normalized_path,
-                        class_index,
-                        class_result.kind,
-                        method_index,
-                    ),
+                    id=_chunk_id(graph_node_id),
+                    graph_node_id=graph_node_id,
                     text=_build_chunk_text(
                         file_result.package, class_result.name, class_result.layer, method_result
                     ),

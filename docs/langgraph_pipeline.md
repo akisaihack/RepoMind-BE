@@ -68,8 +68,8 @@ flowchart TD
 ### 2.2 Neo4j — 코드 구조 그래프
 
 - 노드/엣지 변환: `app/graph/mappings.py`
-  (`map_java_file`, `resolve_cross_file_references`, 공개 함수
-  `class_node_id`/`method_node_id` — chunking.py와 id 공식 공유)
+  (`map_java_file`, `resolve_cross_file_references`; `app/graph/identifiers.py`의
+  `class_key`/`method_key`/`constructor_key`를 chunking.py와 공유)
 - 저장: `app/graph/repositories/code_graph.py`(`CodeGraphRepository.save`)
 - 오케스트레이션: `app/services/code_graph_import.py`(`CodeGraphImportService`)
 - 실행: `scripts/import_code_graph.py --github-repository-id ID --repository-path PATH [--skip-repository-validation]`

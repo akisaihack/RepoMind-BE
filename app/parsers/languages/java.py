@@ -23,6 +23,7 @@ from app.dtos.analysis import (
     JavaMethodResult,
     MethodCall,
 )
+from app.graph.identifiers import java_qualified_name, normalize_java_parameter_signature
 from app.parsers.tree_sitter import (
     build_parser,
     find_nodes_by_type,
@@ -117,7 +118,9 @@ def parse_java_file(path: str, source_bytes: bytes) -> JavaFileResult:
     imports = extract_imports(root_node, source_bytes)
 
     class_nodes = find_nodes_by_type(root_node, _CLASS_LIKE_TYPES)
-    classes = tuple(_build_class_result(node, source_bytes, path) for node in class_nodes)
+    classes = tuple(
+        _build_class_result(node, source_bytes, path, package) for node in class_nodes
+    )
 
     return JavaFileResult(
         path=path,
@@ -300,7 +303,25 @@ def _direct_class_members(class_node: Node, member_types: set[str]) -> list[Node
     return members
 
 
-def _build_class_result(class_node: Node, source_bytes: bytes, file_path: str) -> JavaClassResult:
+def _enclosing_class_names(class_node: Node, source_bytes: bytes) -> tuple[str, ...]:
+    names: list[str] = []
+    parent = class_node.parent
+    while parent is not None:
+        if parent.type in _CLASS_LIKE_TYPES:
+            name_node = get_child_by_field(parent, "name")
+            if name_node is not None:
+                names.append(get_node_text(name_node, source_bytes))
+        parent = parent.parent
+    names.reverse()
+    return tuple(names)
+
+
+def _build_class_result(
+    class_node: Node,
+    source_bytes: bytes,
+    file_path: str,
+    package_name: str | None,
+) -> JavaClassResult:
     name_node = get_child_by_field(class_node, "name")
     class_name = get_node_text(name_node, source_bytes) if name_node else None
     header_text = get_declaration_header(class_node, source_bytes)
@@ -319,6 +340,16 @@ def _build_class_result(class_node: Node, source_bytes: bytes, file_path: str) -
         _build_method_result(member_node, source_bytes, base_path) for member_node in member_nodes
     )
 
+    qualified_name = (
+        java_qualified_name(
+            package_name,
+            _enclosing_class_names(class_node, source_bytes),
+            class_name,
+        )
+        if class_name
+        else None
+    )
+
     return JavaClassResult(
         name=class_name,
         kind=kind,
@@ -328,6 +359,7 @@ def _build_class_result(class_node: Node, source_bytes: bytes, file_path: str) -
         implements=extends_result.implements_names,
         fields=tuple(fields),
         methods=methods,
+        qualified_name=qualified_name,
     )
 
 
@@ -343,11 +375,23 @@ def get_param_signature(node: Node, source_bytes: bytes) -> str:
         return "()"
     types: list[str] = []
     for child in params_node.children:
-        if child.type == "formal_parameter":
+        if child.type in {"formal_parameter", "spread_parameter"}:
             type_node = get_child_by_field(child, "type")
+            if type_node is None and child.type == "spread_parameter":
+                type_node = next(
+                    (
+                        candidate
+                        for candidate in child.named_children
+                        if candidate.type != "variable_declarator"
+                    ),
+                    None,
+                )
             if type_node:
-                types.append(get_node_text(type_node, source_bytes))
-    return "(" + ",".join(types) + ")"
+                type_text = get_node_text(type_node, source_bytes)
+                if child.type == "spread_parameter":
+                    type_text += "..."
+                types.append(type_text)
+    return normalize_java_parameter_signature("(" + ",".join(types) + ")")
 
 
 def extract_api_mapping(node: Node, source_bytes: bytes) -> APIMapping | None:
@@ -413,7 +457,9 @@ def extract_invoked_names(method_body_node: Node, source_bytes: bytes) -> list[M
     return calls
 
 
-def _build_method_result(method_node: Node, source_bytes: bytes, base_path: str) -> JavaMethodResult:
+def _build_method_result(
+    method_node: Node, source_bytes: bytes, base_path: str
+) -> JavaMethodResult:
     is_constructor = method_node.type == "constructor_declaration"
     name_node = get_child_by_field(method_node, "name")
     name = get_node_text(name_node, source_bytes) if name_node else None

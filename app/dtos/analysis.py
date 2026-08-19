@@ -84,6 +84,7 @@ class JavaClassResult:
     implements: tuple[str, ...]
     fields: tuple[FieldResult, ...]
     methods: tuple[JavaMethodResult, ...]
+    qualified_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,4 +108,3 @@ class AnalysisRequest:
 class AnalysisFailureInfo:
     error_code: str
     message: str
-
