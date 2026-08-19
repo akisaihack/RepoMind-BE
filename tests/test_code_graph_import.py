@@ -20,12 +20,18 @@ def test_validates_repository_before_saving(tmp_path) -> None:
     callback = Mock()
 
     result = CodeGraphImportService(graph_repository, validator, callback).import_repository(
-        123, tmp_path
+        123, tmp_path, "abc123"
     )
 
     validator.validate.assert_called_once_with(123, tmp_path.resolve(), skip=False)
     callback.assert_called_once_with(identity)
     graph_repository.save.assert_called_once()
+    graph_repository.save.assert_called_once_with(
+        graph_repository.save.call_args.args[0],
+        github_repository_id=123,
+        commit_hash="abc123",
+    )
+    assert result.commit_hash == "abc123"
     assert result.repository_full_name == "OpenAI/codex"
     assert result.repository_validation_source == "neo4j"
 
@@ -36,7 +42,9 @@ def test_repository_mismatch_stops_before_graph_save(tmp_path) -> None:
     validator.validate.side_effect = RepositoryIdentityMismatchError("mismatch")
 
     with pytest.raises(RepositoryIdentityMismatchError):
-        CodeGraphImportService(graph_repository, validator).import_repository(123, tmp_path)
+        CodeGraphImportService(graph_repository, validator).import_repository(
+            123, tmp_path, "abc123"
+        )
 
     graph_repository.save.assert_not_called()
 
@@ -48,7 +56,7 @@ def test_explicit_skip_is_forwarded_to_validator(tmp_path) -> None:
     validator.validate.return_value = RepositoryIdentity(123, None, None, "skipped", True)
 
     result = CodeGraphImportService(graph_repository, validator).import_repository(
-        123, tmp_path, skip_repository_validation=True
+        123, tmp_path, "abc123", skip_repository_validation=True
     )
 
     validator.validate.assert_called_once_with(123, tmp_path.resolve(), skip=True)

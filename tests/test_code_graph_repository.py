@@ -124,6 +124,42 @@ def test_empty_document_does_not_open_transaction() -> None:
     client.execute_write.assert_not_called()
 
 
+def test_records_deleted_methods_when_saving_a_commit_snapshot() -> None:
+    client, transaction = _transactional_client()
+
+    CodeGraphRepository(client).save(
+        _document(), github_repository_id=100, commit_hash="abc123"
+    )
+
+    last_call = transaction.run.call_args_list[-1]
+    assert "DELETED_IN" in last_call.args[0]
+    assert last_call.kwargs == {
+        "repositoryId": 100,
+        "commitKey": "100:commit:abc123",
+        "activeMethodKeys": [],
+    }
+
+
+def test_resolves_nearest_method_version_and_deleted_state() -> None:
+    client = Mock()
+    version = {"key": "method:version:hash"}
+    client.execute_query.return_value = (
+        [{"version": version, "eventType": "version", "distance": 1}],
+        None,
+        None,
+    )
+    repository = CodeGraphRepository(client)
+
+    assert repository.find_method_version_at_commit(100, "method", "abc123") == version
+
+    client.execute_query.return_value = (
+        [{"version": None, "eventType": "deleted", "distance": 0}],
+        None,
+        None,
+    )
+    assert repository.find_method_version_at_commit(100, "method", "def456") is None
+
+
 def test_rejects_non_positive_batch_size() -> None:
     with pytest.raises(ValueError, match="batch size"):
         CodeGraphRepository(Mock(), batch_size=0)

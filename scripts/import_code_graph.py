@@ -22,6 +22,11 @@ def main() -> None:
     parser.add_argument("--github-repository-id", required=True, type=int)
     parser.add_argument("--repository-path", required=True, type=Path)
     parser.add_argument(
+        "--commit-hash",
+        required=True,
+        help="이 코드 스냅샷에 해당하는 실제 Commit SHA.",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=DEFAULT_BATCH_SIZE,
@@ -50,6 +55,7 @@ def main() -> None:
             ).import_repository(
                 args.github_repository_id,
                 args.repository_path,
+                args.commit_hash,
                 skip_repository_validation=args.skip_repository_validation,
             )
     except (

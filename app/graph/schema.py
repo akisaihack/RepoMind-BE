@@ -14,6 +14,8 @@ CONSTRAINTS = (
     "CREATE CONSTRAINT class_key IF NOT EXISTS FOR (n:Class) REQUIRE n.key IS UNIQUE",
     "CREATE CONSTRAINT interface_key IF NOT EXISTS FOR (n:Interface) REQUIRE n.key IS UNIQUE",
     "CREATE CONSTRAINT method_key IF NOT EXISTS FOR (n:Method) REQUIRE n.key IS UNIQUE",
+    "CREATE CONSTRAINT method_version_key IF NOT EXISTS "
+    "FOR (n:MethodVersion) REQUIRE n.key IS UNIQUE",
     "CREATE CONSTRAINT endpoint_key IF NOT EXISTS FOR (n:Endpoint) REQUIRE n.key IS UNIQUE",
     "CREATE CONSTRAINT developer_github_id IF NOT EXISTS "
     "FOR (n:Developer) REQUIRE n.githubId IS UNIQUE",

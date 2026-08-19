@@ -1,5 +1,6 @@
 """Deterministic, repository-scoped identifiers shared by graph importers."""
 
+import hashlib
 import re
 
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
@@ -115,6 +116,26 @@ def constructor_key(class_id: str, class_name: str, parameter_signature: str) ->
         raise ValueError("Class key and constructor name must not be empty.")
     signature = normalize_java_parameter_signature(parameter_signature)
     return f"{class_id}:constructor:{class_name.strip()}:{signature}"
+
+
+def method_content_hash(source: str) -> str:
+    """Return a stable SHA-256 for one method's normalized source text."""
+    if not isinstance(source, str):
+        raise ValueError("Method source must be a string.")
+    normalized_lines = (
+        line.rstrip() for line in source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    )
+    normalized = "\n".join(normalized_lines).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def method_version_key(method_id: str, content_hash: str) -> str:
+    """Return a content-addressed version key owned by a logical Method."""
+    if not method_id:
+        raise ValueError("Method key must not be empty.")
+    if not re.fullmatch(r"[0-9a-f]{64}", content_hash):
+        raise ValueError("Method content hash must be a lowercase SHA-256 value.")
+    return f"{method_id}:version:{content_hash}"
 
 
 def _validate_repository_id(github_repository_id: int) -> None:

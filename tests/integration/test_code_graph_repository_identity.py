@@ -57,7 +57,7 @@ def test_matching_local_origin_and_neo4j_repository_can_import(tmp_path) -> None
             result = CodeGraphImportService(
                 CodeGraphRepository(client),
                 RepositoryIdentityValidator(client, github_lookup),
-            ).import_repository(REPOSITORY_ID, tmp_path)
+            ).import_repository(REPOSITORY_ID, tmp_path, "identity-test")
 
             assert result.repository_full_name == FULL_NAME
             assert result.repository_validation_source == "neo4j"
