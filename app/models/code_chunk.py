@@ -29,12 +29,9 @@ def _utcnow() -> datetime:
 class CodeChunk(db.Model):
     """메서드/생성자 단위 코드 청크 + 임베딩 벡터.
 
-    graph_node_id가 Neo4j Method 노드 id와 항상 동일하므로(app/graph/
-    mappings.py 공식 재사용, app/services/chunking.py 참고), 이 컬럼을
-    기준으로 pgvector 검색 결과를 그래프 노드로 바로 연결할 수 있음.
-
-    한 메서드당 최신 스냅샷 한 행만 유지함(graph_node_id UNIQUE) — 재분석
-    시 새 커밋 값으로 upsert(덮어쓰기)하며, 커밋별 이력을 계속 쌓지 않음.
+    graph_node_id는 Neo4j MethodVersion key와 동일하고 method_node_id는
+    안정적인 Method 논리 노드를 가리킨다. 같은 소스 버전은 재사용하고
+    content_hash가 달라진 경우에만 새로운 행을 저장한다.
     """
 
     __tablename__ = "code_chunks"
@@ -49,6 +46,8 @@ class CodeChunk(db.Model):
     id: Mapped[int] = mapped_column(_PRIMARY_KEY_TYPE, primary_key=True, autoincrement=True)
     chunk_id: Mapped[str] = mapped_column(Text, nullable=False)
     graph_node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    method_node_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     github_repository_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     commit_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     path: Mapped[str] = mapped_column(Text, nullable=False)

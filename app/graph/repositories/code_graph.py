@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from collections.abc import Iterator
+from typing import Any
 
 from neo4j import ManagedTransaction
 from neo4j.exceptions import Neo4jError
@@ -9,12 +10,17 @@ from neo4j.exceptions import Neo4jError
 from app.clients.neo4j import Neo4jClient
 from app.dtos.graph import GraphDocument, GraphEdge, GraphNode
 
-ALLOWED_NODE_LABELS = frozenset({"File", "Package", "Class", "Interface", "Method", "Endpoint"})
+ALLOWED_NODE_LABELS = frozenset(
+    {"Commit", "File", "Package", "Class", "Interface", "Method", "MethodVersion", "Endpoint"}
+)
 ALLOWED_RELATIONSHIP_TYPES = frozenset(
     {
         "DECLARES",
         "CONTAINS",
         "CALLS",
+        "HAS_VERSION",
+        "INTRODUCED_IN",
+        "DELETED_IN",
         "EXTENDS",
         "IMPLEMENTS",
         "IMPORTS",
@@ -40,8 +46,16 @@ class CodeGraphRepository:
         self._client = client
         self._batch_size = batch_size
 
-    def save(self, document: GraphDocument) -> int:
+    def save(
+        self,
+        document: GraphDocument,
+        *,
+        github_repository_id: int | None = None,
+        commit_hash: str | None = None,
+    ) -> int:
         """MERGE internal graph nodes and edges; return skipped external edge count."""
+        if (github_repository_id is None) != (commit_hash is None):
+            raise ValueError("github_repository_id and commit_hash must be provided together.")
         nodes_by_id = self._validate_nodes(document.nodes)
         internal_edges, skipped_external = self._validate_edges(document.edges, nodes_by_id)
 
@@ -73,6 +87,14 @@ class CodeGraphRepository:
             for labels, rows in relationship_batches.items():
                 for batch in _batches(rows, self._batch_size):
                     transaction.run(_relationship_query(*labels), rows=batch).consume()
+            if github_repository_id is not None and commit_hash is not None:
+                method_keys = [node.id for node in nodes_by_id.values() if node.type == "Method"]
+                transaction.run(
+                    _mark_deleted_methods_query(),
+                    repositoryId=github_repository_id,
+                    commitKey=f"{github_repository_id}:commit:{commit_hash}",
+                    activeMethodKeys=method_keys,
+                ).consume()
 
         try:
             self._client.execute_write(_save_in_transaction)
@@ -80,6 +102,22 @@ class CodeGraphRepository:
             raise CodeGraphPersistenceError("Failed to persist source-code graph.") from exc
 
         return skipped_external
+
+    def find_method_version_at_commit(
+        self,
+        github_repository_id: int,
+        method_key: str,
+        commit_hash: str,
+    ) -> Any | None:
+        """Resolve the nearest version/deletion event reachable from a Commit."""
+        commit_key = f"{github_repository_id}:commit:{commit_hash}"
+        records, _, _ = self._client.execute_query(
+            _find_method_version_at_commit_query(),
+            {"methodKey": method_key, "commitKey": commit_key},
+        )
+        if not records or records[0]["eventType"] == "deleted":
+            return None
+        return records[0]["version"]
 
     @staticmethod
     def _validate_nodes(nodes: tuple[GraphNode, ...]) -> dict[str, GraphNode]:
@@ -133,10 +171,74 @@ SET node += row.properties
 
 
 def _relationship_query(source_label: str, relationship: str, target_label: str) -> str:
+    if relationship == "INTRODUCED_IN":
+        return _introduced_in_query()
     return f"""
 UNWIND $rows AS row
 MATCH (source:{source_label} {{key: row.fromKey}})
 MATCH (target:{target_label} {{key: row.toKey}})
 MERGE (source)-[relation:{relationship}]->(target)
 SET relation += row.properties
+"""
+
+
+def _introduced_in_query() -> str:
+    return """
+UNWIND $rows AS row
+MATCH (source:MethodVersion {key: row.fromKey})
+MATCH (target:Commit {key: row.toKey})
+MATCH (method:Method)-[:HAS_VERSION]->(source)
+WHERE NOT EXISTS {
+  MATCH (source)-[:INTRODUCED_IN]->(introduced:Commit)
+  MATCH introPath = (target)-[:PARENT*0..]->(introduced)
+  WHERE NOT EXISTS {
+    MATCH (method)-[:DELETED_IN]->(deleted:Commit)
+    MATCH deletePath = (target)-[:PARENT*0..]->(deleted)
+    WHERE length(deletePath) < length(introPath)
+  }
+}
+MERGE (source)-[relation:INTRODUCED_IN]->(target)
+SET relation += row.properties
+"""
+
+
+def _mark_deleted_methods_query() -> str:
+    return """
+MATCH (commit:Commit {key: $commitKey})
+MATCH (method:Method {githubRepositoryId: $repositoryId})
+WHERE NOT method.key IN $activeMethodKeys
+  AND EXISTS { (method)-[:HAS_VERSION]->(:MethodVersion) }
+CALL (commit, method) {
+  MATCH (method)-[:HAS_VERSION]->(:MethodVersion)-[:INTRODUCED_IN]->(introduced:Commit)
+  MATCH path = (commit)-[:PARENT*0..]->(introduced)
+  RETURN 'version' AS eventType, length(path) AS distance
+  UNION ALL
+  MATCH (method)-[:DELETED_IN]->(deleted:Commit)
+  MATCH path = (commit)-[:PARENT*0..]->(deleted)
+  RETURN 'deleted' AS eventType, length(path) AS distance
+}
+WITH commit, method, eventType, distance
+ORDER BY method.key, distance
+WITH commit, method, head(collect(eventType)) AS nearestEvent
+WHERE nearestEvent = 'version'
+MERGE (method)-[:DELETED_IN]->(commit)
+"""
+
+
+def _find_method_version_at_commit_query() -> str:
+    return """
+MATCH (target:Commit {key: $commitKey})
+MATCH (method:Method {key: $methodKey})
+CALL (target, method) {
+  MATCH (method)-[:HAS_VERSION]->(version:MethodVersion)-[:INTRODUCED_IN]->(introduced:Commit)
+  MATCH path = (target)-[:PARENT*0..]->(introduced)
+  RETURN version AS version, 'version' AS eventType, length(path) AS distance
+  UNION ALL
+  MATCH (method)-[:DELETED_IN]->(deleted:Commit)
+  MATCH path = (target)-[:PARENT*0..]->(deleted)
+  RETURN null AS version, 'deleted' AS eventType, length(path) AS distance
+}
+RETURN version, eventType, distance
+ORDER BY distance ASC
+LIMIT 1
 """

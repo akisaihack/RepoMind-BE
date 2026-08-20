@@ -33,7 +33,7 @@ def main() -> None:
         source_bytes = file_path.read_bytes().replace(b"\r\n", b"\n")
         relative_path = file_path.relative_to(SAMPLE_REPO_PATH).as_posix()
         file_result = parse_java_file(relative_path, source_bytes)
-        documents.append(map_java_file(GITHUB_REPOSITORY_ID, file_result))
+        documents.append(map_java_file(GITHUB_REPOSITORY_ID, file_result, "manual-check"))
 
     final_document = resolve_cross_file_references(documents)
 

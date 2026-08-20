@@ -22,7 +22,7 @@
       `NEO4J_URI=neo4j://localhost:7687`가 Postgres 때처럼 로컬이 아니라
       실제 공유 서버 주소여야 할 가능성 높음. Neo4j Browser(`http://호스트:7474`)로
       접속 테스트
-- [ ] `python scripts/import_code_graph.py --github-repository-id 123231656 --repository-path "D:\PJ\repomind-testdata\spring-security-react-ant-design-polls-app\polling-app-server" --skip-repository-validation` 실행해서 Neo4j에 코드 그래프(Class/Method 노드 등) 실제 적재 확인
+- [ ] `python scripts/import_code_graph.py --github-repository-id 123231656 --repository-path "D:\PJ\repomind-testdata\spring-security-react-ant-design-polls-app\polling-app-server" --commit-hash 362fad90cab17e76453b3b9e273c594de6ee3d7f --skip-repository-validation` 실행해서 Neo4j에 코드 그래프(Class/Method/MethodVersion 노드 등) 실제 적재 확인
 
 ---
 

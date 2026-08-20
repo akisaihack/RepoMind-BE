@@ -29,11 +29,7 @@ class CodeChunkRepository:
         chunks: list[CodeChunkDTO],
         embeddings: list[list[float]],
     ) -> int:
-        """chunk/embedding 쌍을 graph_node_id 기준으로 upsert.
-
-        같은 메서드를 다시 분석하면(재실행) 기존 행을 최신 커밋 값으로
-        덮어씀 — 커밋별 이력을 계속 쌓는 게 아니라 최신 스냅샷 하나만 유지.
-        """
+        """Upsert content-addressed MethodVersion chunks by graph_node_id."""
         if len(chunks) != len(embeddings):
             raise ValueError("chunks and embeddings must have the same length.")
 
@@ -41,10 +37,16 @@ class CodeChunkRepository:
             for chunk, embedding in zip(chunks, embeddings, strict=True):
                 row = self._find(chunk.graph_node_id)
                 if row is None:
-                    row = CodeChunk(graph_node_id=chunk.graph_node_id)
-                    self._session.add(row)
+                    row = self._find_legacy(chunk.method_node_id)
+                    if row is None:
+                        row = CodeChunk(graph_node_id=chunk.graph_node_id)
+                        self._session.add(row)
+                    else:
+                        row.graph_node_id = chunk.graph_node_id
 
                 row.chunk_id = chunk.id
+                row.method_node_id = chunk.method_node_id
+                row.content_hash = chunk.content_hash
                 row.github_repository_id = chunk.github_repository_id
                 row.commit_hash = chunk.commit_hash
                 row.path = chunk.path
@@ -73,6 +75,22 @@ class CodeChunkRepository:
 
         return len(chunks)
 
+    def find_existing_graph_node_ids(self, graph_node_ids: list[str]) -> set[str]:
+        """Return MethodVersion chunk IDs that already have an embedding."""
+        if not graph_node_ids:
+            return set()
+        statement = select(CodeChunk.graph_node_id).where(
+            CodeChunk.graph_node_id.in_(graph_node_ids)
+        )
+        return set(self._session.scalars(statement).all())
+
     def _find(self, graph_node_id: str) -> CodeChunk | None:
         statement = select(CodeChunk).where(CodeChunk.graph_node_id == graph_node_id)
+        return self._session.scalars(statement).one_or_none()
+
+    def _find_legacy(self, method_node_id: str) -> CodeChunk | None:
+        statement = select(CodeChunk).where(
+            CodeChunk.method_node_id == method_node_id,
+            CodeChunk.content_hash == "0" * 64,
+        )
         return self._session.scalars(statement).one_or_none()

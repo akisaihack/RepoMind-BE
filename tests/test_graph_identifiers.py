@@ -7,7 +7,9 @@ from app.graph.identifiers import (
     constructor_key,
     file_key,
     java_qualified_name,
+    method_content_hash,
     method_key,
+    method_version_key,
     normalize_java_parameter_signature,
     normalize_repository_path,
 )
@@ -59,4 +61,17 @@ def test_stable_code_keys_distinguish_overloads_and_constructors() -> None:
 def test_normalizes_parameter_signature_formatting() -> None:
     assert normalize_java_parameter_signature("(Map < String, List < Long > >, int [])") == (
         "(Map<String,List<Long>>,int[])"
+    )
+
+
+def test_method_version_key_changes_only_with_normalized_source() -> None:
+    method_id = "100:class:src/App.java:com.example.App:method:save:()"
+    first_hash = method_content_hash("void save() {\r\n  run();   \r\n}")
+    same_hash = method_content_hash("void save() {\n  run();\n}")
+    changed_hash = method_content_hash("void save() {\n  stop();\n}")
+
+    assert first_hash == same_hash
+    assert first_hash != changed_hash
+    assert method_version_key(method_id, first_hash) == (
+        f"{method_id}:version:{first_hash}"
     )

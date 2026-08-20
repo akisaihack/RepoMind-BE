@@ -1,9 +1,9 @@
 """Parse Java sources from a local checkout, embed chunks, and persist to pgvector.
 
 app/services/code_graph_import.py와 짝을 이루는 서비스 — 그래프 쪽이 Neo4j에
-Method 노드를 저장한다면, 이 서비스는 같은 소스에서 뽑은 청크를 임베딩해서
-pgvector(code_chunks 테이블)에 저장함. graph_node_id가 같은 공식으로 계산되기
-때문에 두 결과는 항상 서로 연결됨(app/services/chunking.py 참고).
+Method/MethodVersion 노드를 저장한다면, 이 서비스는 같은 소스에서 뽑은 청크를
+임베딩해서 pgvector(code_chunks 테이블)에 저장함. graph_node_id가 동일한
+content hash 공식으로 계산되기 때문에 정확한 MethodVersion과 연결됨.
 """
 
 from collections.abc import Callable, Iterable
@@ -78,14 +78,21 @@ class ChunkImportService:
                 f"[{index}/{len(java_files)}] {relative_path}: {len(file_chunks)} chunks"
             )
 
-        if chunks:
-            self._on_progress(f"embedding {len(chunks)} chunks via Azure OpenAI...")
-            embeddings = self._embed_all(chunk.text for chunk in chunks)
+        existing_ids = self._chunk_repository.find_existing_graph_node_ids(
+            [chunk.graph_node_id for chunk in chunks]
+        )
+        new_chunks = [chunk for chunk in chunks if chunk.graph_node_id not in existing_ids]
+        if existing_ids:
+            self._on_progress(f"reusing {len(existing_ids)} existing version chunks.")
+
+        if new_chunks:
+            self._on_progress(f"embedding {len(new_chunks)} new version chunks via Azure OpenAI...")
+            embeddings = self._embed_all(chunk.text for chunk in new_chunks)
             self._on_progress("writing chunks + embeddings to pgvector...")
-            self._chunk_repository.upsert_chunks(chunks, embeddings)
+            self._chunk_repository.upsert_chunks(new_chunks, embeddings)
             self._on_progress("pgvector write complete.")
         else:
-            self._on_progress("no chunks found, nothing to embed.")
+            self._on_progress("no new code versions found, nothing to embed.")
 
         return ChunkImportResult(
             github_repository_id=github_repository_id,
@@ -98,8 +105,11 @@ class ChunkImportService:
         """Azure OpenAI 요청 크기 제한을 피하려고 배치 단위로 나눠서 임베딩."""
         text_list = list(texts)
         embeddings: list[list[float]] = []
-        batch_count = (len(text_list) + self._embedding_batch_size - 1) // self._embedding_batch_size
-        for batch_index, start in enumerate(range(0, len(text_list), self._embedding_batch_size), 1):
+        batch_count = (
+            len(text_list) + self._embedding_batch_size - 1
+        ) // self._embedding_batch_size
+        starts = range(0, len(text_list), self._embedding_batch_size)
+        for batch_index, start in enumerate(starts, 1):
             batch = text_list[start : start + self._embedding_batch_size]
             self._on_progress(f"  embedding batch {batch_index}/{batch_count} ({len(batch)} texts)")
             embeddings.extend(self._embedding_service.embed(batch))

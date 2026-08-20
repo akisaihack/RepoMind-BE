@@ -34,7 +34,9 @@ from app.graph.identifiers import (
     constructor_key,
     file_key,
     java_qualified_name,
+    method_content_hash,
     method_key,
+    method_version_key,
     normalize_repository_path,
     repository_scoped_key,
 )
@@ -101,8 +103,6 @@ def _build_method_node(
         "name": method_result.name,
         "signature": method_result.param_signature,
         "is_constructor": method_result.is_constructor,
-        "start_line": method_result.start_line,
-        "end_line": method_result.end_line,
         # CALLS 해석 시 "이 메서드가 어느 클래스 소속인지" 역참조하는 용도
         "class_name": class_result.name,
         "class_qualified_name": class_qualified_name,
@@ -112,6 +112,27 @@ def _build_method_node(
         properties["http_method"] = method_result.api_mapping.http_method
         properties["path"] = method_result.api_mapping.path
     return GraphNode(id=method_id, type="Method", properties=properties)
+
+
+def _build_method_version_node(
+    version_id: str,
+    method_id: str,
+    method_result: JavaMethodResult,
+    github_repository_id: int,
+    content_hash: str,
+) -> GraphNode:
+    properties: dict = {
+        "methodKey": method_id,
+        "contentHash": content_hash,
+        "sourceCode": method_result.text,
+        "startLine": method_result.start_line,
+        "endLine": method_result.end_line,
+        "githubRepositoryId": github_repository_id,
+    }
+    if method_result.api_mapping:
+        properties["httpMethod"] = method_result.api_mapping.http_method
+        properties["apiPath"] = method_result.api_mapping.path
+    return GraphNode(id=version_id, type="MethodVersion", properties=properties)
 
 
 def _build_endpoint_node(github_repository_id: int, http_method: str, path: str) -> GraphNode:
@@ -205,7 +226,11 @@ def _build_exposes_edge(method_id: str, endpoint_id: str) -> GraphEdge:
 # ---------- 1단계: 파일 하나 변환 ----------
 
 
-def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> GraphDocument:
+def map_java_file(
+    github_repository_id: int,
+    file_result: JavaFileResult,
+    commit_hash: str,
+) -> GraphDocument:
     """자바 파일 파싱 결과 하나를 GraphDocument(노드+엣지)로 변환.
 
     CALLS/EXTENDS/IMPLEMENTS/IMPORTS/MANAGES 엣지는 아직 미해결
@@ -225,6 +250,14 @@ def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> Gra
                 "path": normalized_path,
                 "githubRepositoryId": github_repository_id,
             },
+        )
+    )
+    commit_id = repository_scoped_key(github_repository_id, "commit", commit_hash)
+    nodes.append(
+        GraphNode(
+            id=commit_id,
+            type="Commit",
+            properties={"sha": commit_hash, "githubRepositoryId": github_repository_id},
         )
     )
 
@@ -296,7 +329,29 @@ def map_java_file(github_repository_id: int, file_result: JavaFileResult) -> Gra
                 )
             )
             edges.append(_build_contains_edge(class_id, method_id))
-            edges.extend(_build_calls_edges(method_id, method_result, class_result))
+            content_hash = method_content_hash(method_result.text)
+            version_id = method_version_key(method_id, content_hash)
+            nodes.append(
+                _build_method_version_node(
+                    version_id,
+                    method_id,
+                    method_result,
+                    github_repository_id,
+                    content_hash,
+                )
+            )
+            edges.append(
+                GraphEdge(type="HAS_VERSION", source=method_id, target=version_id, properties={})
+            )
+            edges.append(
+                GraphEdge(
+                    type="INTRODUCED_IN",
+                    source=version_id,
+                    target=commit_id,
+                    properties={},
+                )
+            )
+            edges.extend(_build_calls_edges(version_id, method_result, class_result))
 
             if method_result.api_mapping:
                 http_method = method_result.api_mapping.http_method

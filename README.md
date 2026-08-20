@@ -320,7 +320,8 @@ python scripts/init_neo4j_schema.py
 ```bash
 python scripts/import_code_graph.py \
   --github-repository-id 1296269 \
-  --repository-path /path/to/repository
+  --repository-path /path/to/repository \
+  --commit-hash "$(git -C /path/to/repository rev-parse HEAD)"
 ```
 
 import 전에 로컬 저장소의 `origin`과 `githubRepositoryId`가 가리키는 GitHub 저장소가 같은지
@@ -332,8 +333,14 @@ import 전에 로컬 저장소의 `origin`과 `githubRepositoryId`가 가리키�
 python scripts/import_code_graph.py \
   --github-repository-id 1296269 \
   --repository-path /path/to/repository \
+  --commit-hash "$(git -C /path/to/repository rev-parse HEAD)" \
   --skip-repository-validation
 ```
+
+Method는 정규화된 논리 ID를 유지하고, 실제 메서드 소스가 변경될 때만
+`MethodVersion` 노드를 추가합니다. 코드 청크의 `graph_node_id`는 이
+`MethodVersion` key와 동일하므로 특정 Commit의 코드 상태와 벡터 검색 결과를
+직접 연결할 수 있습니다.
 
 백엔드를 호스트에서 실행할 때 `NEO4J_URI=bolt://127.0.0.1:7687`은 실행 중인 컴퓨터의
 로컬 Neo4j를 가리킵니다. 백엔드까지 Docker 컨테이너에서 실행하는 경우에는 Compose 서비스

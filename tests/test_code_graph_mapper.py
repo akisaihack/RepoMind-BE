@@ -2,6 +2,7 @@
 
 from app.dtos.analysis import FieldResult, JavaClassResult, JavaFileResult, JavaMethodResult
 from app.graph.mappings import map_java_file, resolve_cross_file_references
+from app.parsers.languages.java import parse_java_file
 
 
 def _map(repository_id: int, path: str = "src/App.java"):
@@ -11,7 +12,7 @@ def _map(repository_id: int, path: str = "src/App.java"):
         JavaClassResult("App", "class", "Other", None, (), ("Named",), (), (method,)),
     )
     result = JavaFileResult(path, "com.example", (), classes)
-    return map_java_file(repository_id, result)
+    return map_java_file(repository_id, result, "abc123")
 
 
 def test_creates_shared_file_and_declares_relationships() -> None:
@@ -64,6 +65,61 @@ def test_class_fields_use_neo4j_compatible_primitive_values() -> None:
         ),
     )
 
-    class_node = next(node for node in map_java_file(100, result).nodes if node.type == "Class")
+    class_node = next(
+        node for node in map_java_file(100, result, "abc123").nodes if node.type == "Class"
+    )
 
     assert class_node.properties["fields"] == ["OrderRepository repository"]
+
+
+def test_method_versions_own_calls_and_link_to_logical_methods_and_commit() -> None:
+    result = parse_java_file(
+        "src/App.java",
+        b"class App { void target() {} void source() { target(); } }",
+    )
+
+    document = resolve_cross_file_references((map_java_file(100, result, "abc123"),))
+    methods = {node.properties["name"]: node for node in document.nodes if node.type == "Method"}
+    versions = {
+        node.properties["methodKey"]: node
+        for node in document.nodes
+        if node.type == "MethodVersion"
+    }
+    source_version = versions[methods["source"].id]
+
+    assert any(
+        edge.type == "HAS_VERSION"
+        and edge.source == methods["source"].id
+        and edge.target == source_version.id
+        for edge in document.edges
+    )
+    assert any(
+        edge.type == "INTRODUCED_IN"
+        and edge.source == source_version.id
+        and edge.target == "100:commit:abc123"
+        for edge in document.edges
+    )
+    assert any(
+        edge.type == "CALLS"
+        and edge.source == source_version.id
+        and edge.target == methods["target"].id
+        for edge in document.edges
+    )
+
+
+def test_unchanged_method_reuses_version_and_changed_body_creates_new_version() -> None:
+    before = parse_java_file("src/App.java", b"class App { void run() { start(); } }")
+    moved = parse_java_file(
+        "src/App.java", b"class App {\n\n  void run() { start(); }\n}"
+    )
+    changed = parse_java_file("src/App.java", b"class App { void run() { stop(); } }")
+
+    def version_id(result):
+        return next(
+            node.id
+            for node in map_java_file(100, result, "abc123").nodes
+            if node.type == "MethodVersion"
+        )
+
+    assert version_id(before) == version_id(moved)
+    assert version_id(before) != version_id(changed)

@@ -12,6 +12,7 @@ from app.services.repository_identity import RepositoryIdentity, RepositoryIdent
 @dataclass(frozen=True, slots=True)
 class CodeGraphImportResult:
     github_repository_id: int
+    commit_hash: str
     files: int
     packages: int
     classes: int
@@ -40,12 +41,15 @@ class CodeGraphImportService:
         self,
         github_repository_id: int,
         repository_path: Path,
+        commit_hash: str,
         *,
         skip_repository_validation: bool = False,
     ) -> CodeGraphImportResult:
         repository_path = repository_path.resolve()
         if not repository_path.is_dir():
             raise ValueError(f"Repository path is not a directory: {repository_path}")
+        if not commit_hash.strip():
+            raise ValueError("commit_hash must not be empty.")
 
         identity = self._identity_validator.validate(
             github_repository_id,
@@ -63,10 +67,14 @@ class CodeGraphImportService:
         for file_path in java_files:
             relative_path = file_path.relative_to(repository_path).as_posix()
             file_result = parse_java_file(relative_path, file_path.read_bytes())
-            documents.append(map_java_file(github_repository_id, file_result))
+            documents.append(map_java_file(github_repository_id, file_result, commit_hash))
 
         document = resolve_cross_file_references(documents)
-        skipped_external = self._graph_repository.save(document)
+        skipped_external = self._graph_repository.save(
+            document,
+            github_repository_id=github_repository_id,
+            commit_hash=commit_hash,
+        )
 
         counts = {node_type: 0 for node_type in _RESULT_NODE_TYPES}
         for node in document.nodes:
@@ -75,6 +83,7 @@ class CodeGraphImportService:
 
         return CodeGraphImportResult(
             github_repository_id=github_repository_id,
+            commit_hash=commit_hash,
             files=counts["File"],
             packages=counts["Package"],
             classes=counts["Class"],
