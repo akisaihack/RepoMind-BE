@@ -91,8 +91,32 @@ def test_context_budget_removes_lower_priority_relations_before_code() -> None:
         for index in range(20)
     )
 
-    context = LLMContextBuilder(max_context_chars=1_200).build(input_data)
+    context = LLMContextBuilder().build(input_data, max_context_chars=1_200)
 
     assert context.code
     assert len(context.model_dump_json(exclude_none=True)) <= 1_200
     assert len(context.relations) < 21
+
+
+def test_default_context_keeps_all_relevant_relations_without_count_limit() -> None:
+    input_data = _input()
+    input_data.context.graph = [
+        {
+            "source": {
+                "name": f"Caller{index}.run",
+                "id": f"caller:{index}",
+                "type": "SYMBOL",
+            },
+            "relation": "CALLS",
+            "target": {
+                "name": f"Target{index}.run",
+                "id": f"target:{index}",
+                "type": "SYMBOL",
+            },
+        }
+        for index in range(40)
+    ]
+
+    context = LLMContextBuilder().build(input_data)
+
+    assert len(context.relations) == 40

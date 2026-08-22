@@ -14,10 +14,8 @@ from app.dtos.response_generation import QueryIntent, ResponseGenerationInput
 
 logger = logging.getLogger(__name__)
 
-MAX_CODE_CONTEXTS = 5
-MAX_GRAPH_RELATIONS = 30
-MAX_HISTORY_CONTEXTS = 10
-MAX_CONTEXT_CHARS = 20_000
+FALLBACK_MAX_CONTEXT_CHARS = 20_000
+MIN_FALLBACK_CONTEXT_CHARS = 4_000
 
 _RELATIONS_BY_INTENT = {
     QueryIntent.FLOW: frozenset({"CALLS"}),
@@ -46,42 +44,63 @@ _HISTORY_FIELDS = (
 
 
 class LLMContextBuilder:
-    """Remove transport-only graph data and enforce a final provider budget."""
+    """Remove transport-only data, limiting size only for a provider retry."""
 
     def __init__(
         self,
         *,
-        max_code_contexts: int = MAX_CODE_CONTEXTS,
-        max_graph_relations: int = MAX_GRAPH_RELATIONS,
-        max_history_contexts: int = MAX_HISTORY_CONTEXTS,
-        max_context_chars: int = MAX_CONTEXT_CHARS,
+        fallback_max_context_chars: int = FALLBACK_MAX_CONTEXT_CHARS,
     ) -> None:
-        limits = (max_code_contexts, max_graph_relations, max_history_contexts)
-        if any(limit <= 0 for limit in limits) or max_context_chars < 1_000:
-            raise ValueError("LLM context limits must be positive.")
-        self._max_code_contexts = max_code_contexts
-        self._max_graph_relations = max_graph_relations
-        self._max_history_contexts = max_history_contexts
-        self._max_context_chars = max_context_chars
+        if fallback_max_context_chars < 1_000:
+            raise ValueError("Fallback LLM context limit must be at least 1,000 characters.")
+        self._fallback_max_context_chars = fallback_max_context_chars
 
-    def build(self, input_data: ResponseGenerationInput) -> AnswerGenerationContext:
-        code = self._compact_code(input_data.context.code)[: self._max_code_contexts]
+    def build(
+        self,
+        input_data: ResponseGenerationInput,
+        *,
+        max_context_chars: int | None = None,
+    ) -> AnswerGenerationContext:
+        """Compact all relevant evidence and optionally fit it to a retry budget."""
+        if max_context_chars is not None and max_context_chars < 1_000:
+            raise ValueError("LLM context limit must be at least 1,000 characters.")
+
+        code = self._compact_code(input_data.context.code)
         relations = self._compact_relations(
             input_data.context.graph,
             input_data.intent,
-        )[: self._max_graph_relations]
-        history = self._compact_history(input_data.context.history)[: self._max_history_contexts]
+        )
+        history = self._compact_history(input_data.context.history)
 
-        context = self._fit_budget(input_data.intent, code, relations, history)
+        context = AnswerGenerationContext(code=code, relations=relations, history=history)
+        if max_context_chars is not None:
+            context = self._fit_budget(input_data.intent, context, max_context_chars)
         logger.info(
-            "Prepared LLM context: intent=%s code=%d relations=%d history=%d chars=%d",
+            "Prepared LLM context: intent=%s code=%d relations=%d history=%d chars=%d limited=%s",
             input_data.intent.value,
             len(context.code),
             len(context.relations),
             len(context.history),
             _context_size(context),
+            max_context_chars is not None,
         )
         return context
+
+    def build_fallback(
+        self,
+        input_data: ResponseGenerationInput,
+        original_size: int,
+    ) -> AnswerGenerationContext:
+        """Build a smaller context after a provider rate/context limit response."""
+        budget = min(
+            self._fallback_max_context_chars,
+            max(MIN_FALLBACK_CONTEXT_CHARS, original_size // 2),
+        )
+        return self.build(input_data, max_context_chars=budget)
+
+    @staticmethod
+    def size(context: AnswerGenerationContext) -> int:
+        return _context_size(context)
 
     @staticmethod
     def _compact_code(rows: list[dict[str, Any]]) -> list[AnswerCodeContext]:
@@ -165,28 +184,30 @@ class LLMContextBuilder:
     def _fit_budget(
         self,
         intent: QueryIntent,
-        code: list[AnswerCodeContext],
-        relations: list[AnswerRelationContext],
-        history: list[dict[str, Any]],
+        context: AnswerGenerationContext,
+        max_context_chars: int,
     ) -> AnswerGenerationContext:
-        context = AnswerGenerationContext(code=code, relations=relations, history=history)
-        while _context_size(context) > self._max_context_chars:
+        while _context_size(context) > max_context_chars:
             if intent is QueryIntent.HISTORY:
-                reduced = _remove_last(context.relations, context.code)
+                reduced = _remove_last(context.relations) or _remove_last(context.code)
             else:
-                reduced = _remove_last(context.history, context.relations, context.code)
+                reduced = (
+                    _remove_last(context.history)
+                    or _remove_last(context.relations)
+                    or _remove_last(context.code, keep=1)
+                )
             if not reduced:
                 break
-        _truncate_last_code(context, self._max_context_chars)
+        _truncate_last_code(context, max_context_chars)
+        _truncate_last_history(context, max_context_chars)
         return context
 
 
-def _remove_last(*collections: list[Any]) -> bool:
-    for collection in collections:
-        if collection:
-            collection.pop()
-            return True
-    return False
+def _remove_last(collection: list[Any], *, keep: int = 0) -> bool:
+    if len(collection) <= keep:
+        return False
+    collection.pop()
+    return True
 
 
 def _truncate_last_code(context: AnswerGenerationContext, max_chars: int) -> None:
@@ -196,6 +217,20 @@ def _truncate_last_code(context: AnswerGenerationContext, max_chars: int) -> Non
     overage = _context_size(context) - max_chars
     keep = max(0, len(item.code) - overage - 20)
     item.code = f"{item.code[:keep]}…" if keep else ""
+
+
+def _truncate_last_history(context: AnswerGenerationContext, max_chars: int) -> None:
+    if _context_size(context) <= max_chars or not context.history:
+        return
+    item = context.history[-1]
+    for key, value in reversed(item.items()):
+        if not isinstance(value, str):
+            continue
+        overage = _context_size(context) - max_chars
+        keep = max(0, len(value) - overage - 20)
+        item[key] = f"{value[:keep]}…" if keep else ""
+        if _context_size(context) <= max_chars:
+            return
 
 
 def _context_size(context: AnswerGenerationContext) -> int:
