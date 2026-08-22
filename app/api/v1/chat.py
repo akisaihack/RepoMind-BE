@@ -1,6 +1,10 @@
-from flask import Blueprint, jsonify, request
 from dataclasses import asdict
+
+from flask import Blueprint, jsonify, request
+
 from app.dtos.chat import ChatRequest
+from app.dtos.question import QuestionKind
+from app.errors import APIError
 from app.sample.mock_chat import get_mock_chat_response
 
 chat_bp = Blueprint("chat", __name__)
@@ -21,9 +25,18 @@ def chat(session_id: str):
     @throws KeyError 필수 JSON 필드가 누락된 경우 (추후 적용 예정)
     """
     data = request.get_json() or {}
-    req = ChatRequest(
+    raw_question_kind = data.get("question_kind")
+    try:
+        question_kind = QuestionKind(raw_question_kind) if raw_question_kind is not None else None
+    except ValueError as exc:
+        raise APIError(
+            "INVALID_QUESTION_KIND",
+            f"question_kind must be one of: {', '.join(QuestionKind)}.",
+        ) from exc
+
+    _request_dto = ChatRequest(
         question=data.get("question", ""),
-        question_kind=data.get("question_kind")
+        question_kind=question_kind,
     )
     
     # -------------------------------------------------------------------------
