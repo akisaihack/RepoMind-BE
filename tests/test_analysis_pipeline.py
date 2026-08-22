@@ -54,6 +54,7 @@ def test_run_pipeline_success(service, mocks):
     mocks["code_graph_import"].import_repository.assert_called_once_with(
         github_repository_id=123,
         repository_path=mock_path,
+        commit_hash="fakehash",
     )
     mocks["chunk_import"].import_repository.assert_called_once_with(
         github_repository_id=123,
