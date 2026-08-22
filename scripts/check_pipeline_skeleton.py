@@ -1,5 +1,5 @@
 """app/ai/rag/pipeline.py의 build_graph()가 만드는 LangGraph 구조가
-설계한 순서/병렬 분기/조건부 루프대로 동작하는지 확인하는 수동 검증
+설계한 순차 검색/조건부 루프대로 동작하는지 확인하는 수동 검증
 스크립트. 앱 요청 경로의 일부가 아니라 개발 중 눈으로 확인하기 위한 용도
 (scripts/check_chunking.py 등과 같은 패턴).
 
@@ -33,7 +33,8 @@ from app.ai.rag.nodes import (
 from app.ai.rag.pipeline import build_graph
 from app.ai.rag.state import QAState
 
-SAMPLE_GITHUB_REPOSITORY_ID = 123231656  # github.com/callicoder/spring-security-react-ant-design-polls-app
+# github.com/callicoder/spring-security-react-ant-design-polls-app
+SAMPLE_GITHUB_REPOSITORY_ID = 123231656
 SAMPLE_QUESTION = "로그인 프로세스 흐름을 알려줘"
 
 
@@ -70,6 +71,7 @@ def _build_dummy_nodes(call_log: list[str], *, force_sufficient: bool) -> dict:
 
     def dummy_search_graph_evidence(state: QAState) -> dict:
         call_log.append("graph_retriever")
+        assert state.get("vector_results"), "graph_retriever requires vector_results"
         return {"graph_results": {"nodes": [], "edges": []}}
 
     def dummy_fuse_evidence(state: QAState) -> dict:
@@ -128,7 +130,9 @@ def _run_scenario(name: str, *, force_sufficient: bool) -> None:
                 graph_retriever, "search_graph_evidence", dummies["search_graph_evidence"]
             )
         )
-        stack.enter_context(patch.object(evidence_fusion, "fuse_evidence", dummies["fuse_evidence"]))
+        stack.enter_context(
+            patch.object(evidence_fusion, "fuse_evidence", dummies["fuse_evidence"])
+        )
         stack.enter_context(
             patch.object(
                 evidence_validator,
@@ -155,14 +159,7 @@ def _run_scenario(name: str, *, force_sufficient: bool) -> None:
     print("최종 answer:", final_state.get("answer"))
 
     if "answer" not in final_state:
-        print(
-            "[경고] response_composer까지 도달하지 못함 — evidence_fusion이 "
-            "vector_retriever/graph_retriever 둘 다 다시 돌기를 기다리다가 "
-            "멈췄을 가능성이 큼. pipeline.py의 재시도 분기(retry -> "
-            "vector_retriever)를 vector_retriever + graph_retriever 둘 다로 "
-            "바꿔야 할 수도 있음 (build_graph() 함수 docstring의 '알려진 위험' "
-            "참고)."
-        )
+        print("[경고] response_composer까지 도달하지 못함")
 
 
 def main() -> None:
