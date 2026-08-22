@@ -1,0 +1,92 @@
+"""Grounded natural-language answer generation through LangChain."""
+
+import json
+from collections.abc import Mapping
+from http import HTTPStatus
+from typing import Any
+
+from langchain_core.language_models import BaseLanguageModel
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable
+
+from app.ai.generation.prompts import (
+    RESPONSE_INTENT_INSTRUCTIONS,
+    RESPONSE_SYSTEM_PROMPT,
+    RESPONSE_USER_PROMPT,
+)
+from app.clients.azure_openai import AZURE_OPENAI_API_VERSION
+from app.dtos.response_generation import ResponseGenerationInput
+from app.errors import APIError
+
+
+class AnswerGenerationError(Exception):
+    """Raised when the configured language model cannot generate an answer."""
+
+
+class AnswerGenerator:
+    def __init__(self, llm: BaseLanguageModel | Runnable[Any, Any]) -> None:
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", RESPONSE_SYSTEM_PROMPT), ("human", RESPONSE_USER_PROMPT)]
+        )
+        self._chain = prompt | llm | StrOutputParser()
+
+    def generate(self, input_data: ResponseGenerationInput) -> str:
+        """Generate only prose; visualization is deliberately handled elsewhere."""
+        values = {
+            "question": input_data.question,
+            "intent": input_data.intent.value,
+            "target": input_data.target or "지정되지 않음",
+            "intent_instruction": RESPONSE_INTENT_INSTRUCTIONS[input_data.intent],
+            "code_context": _serialize(input_data.context.code),
+            "graph_context": _serialize(input_data.context.graph),
+            "history_context": _serialize(input_data.context.history),
+        }
+        try:
+            answer = self._chain.invoke(values).strip()
+        except Exception as exc:
+            raise AnswerGenerationError("The answer provider request failed.") from exc
+        if not answer:
+            raise AnswerGenerationError("The answer provider returned an empty response.")
+        return answer
+
+
+def _serialize(value: list[dict[str, Any]]) -> str:
+    if not value:
+        return "조회 결과 없음"
+    return json.dumps(value, ensure_ascii=False, default=str, indent=2)
+
+
+def create_azure_answer_generator(config: Mapping[str, Any]) -> AnswerGenerator:
+    """Construct the production LangChain Azure chat model from application config."""
+    required_keys = (
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_DEPLOYMENT",
+    )
+    missing_keys = [key for key in required_keys if not config.get(key)]
+    if missing_keys:
+        raise APIError(
+            "AZURE_OPENAI_CONFIGURATION_ERROR",
+            f"Missing required Azure OpenAI configuration: {', '.join(missing_keys)}.",
+            status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+    # Imported lazily so pure builder/unit-test paths do not initialize a provider SDK.
+    from langchain_openai import AzureChatOpenAI
+
+    llm = AzureChatOpenAI(
+        azure_endpoint=config["AZURE_OPENAI_ENDPOINT"],
+        api_key=config["AZURE_OPENAI_API_KEY"],
+        azure_deployment=config["AZURE_OPENAI_DEPLOYMENT"],
+        api_version=AZURE_OPENAI_API_VERSION,
+        temperature=0,
+    )
+    return AnswerGenerator(llm)
+
+
+__all__ = [
+    "AnswerGenerationError",
+    "AnswerGenerator",
+    "create_azure_answer_generator",
+]
