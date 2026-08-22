@@ -26,6 +26,7 @@ from app.ai.rag.nodes import (
     evidence_validator,
     graph_retriever,
     response_composer,
+    target_selector,
     vector_retriever,
 )
 from app.dtos.question import QuestionKind
@@ -72,6 +73,7 @@ def main() -> None:
         steps = (
             ("코드 심볼 확인", entity_resolver.resolve_entities),
             ("pgvector 검색", vector_retriever.search_vector_evidence),
+            ("분석 대상 선택", target_selector.select_target),
             ("Neo4j 검색", graph_retriever.search_graph_evidence),
             ("검색 근거 통합", evidence_fusion.fuse_evidence),
             ("근거 충분성 검증", evidence_validator.validate_evidence_sufficiency),
@@ -88,6 +90,11 @@ def main() -> None:
 
     print("\n=== 검색 결과 ===")
     print(f"- 벡터 검색: {len(state.get('vector_results', []))}건")
+    selected = state.get("selected_target") or {}
+    print(
+        f"- 선택 대상: {selected.get('class_name')}.{selected.get('method_name')} "
+        f"({selected.get('selection_source')}, {selected.get('selection_reason')})"
+    )
     print(f"- 그래프 노드: {len(graph_results.get('nodes', []))}개")
     print(f"- 그래프 엣지: {len(graph_results.get('edges', []))}개")
     print(f"- 통합 근거: {len(state.get('evidence', []))}건")

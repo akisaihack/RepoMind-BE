@@ -10,6 +10,7 @@ from app.ai.rag.nodes import (
     graph_retriever,
     question_analyzer,
     response_composer,
+    target_selector,
     vector_retriever,
 )
 from app.ai.rag.pipeline import run_qa_pipeline
@@ -39,6 +40,10 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
         observed_question_kinds.append(state.get("question_kind"))
         return {"graph_results": {"nodes": [], "edges": []}}
 
+    def select(state):
+        call_order.append("target")
+        return {"selected_target": state["vector_results"][0]}
+
     def fuse(_state):
         call_order.append("fusion")
         return {"evidence": [{"id": "evidence:1"}]}
@@ -61,6 +66,7 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
         (question_analyzer, "classify_question", classify),
         (entity_resolver, "resolve_entities", resolve),
         (vector_retriever, "search_vector_evidence", vector),
+        (target_selector, "select_target", select),
         (graph_retriever, "search_graph_evidence", graph),
         (evidence_fusion, "fuse_evidence", fuse),
         (evidence_validator, "validate_evidence_sufficiency", validate),
@@ -86,6 +92,7 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
         "question",
         "entity",
         "vector",
+        "target",
         "graph",
         "fusion",
         "validation",
@@ -118,6 +125,10 @@ def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
         ]
         return {"graph_results": {"nodes": [], "edges": []}}
 
+    def select(state):
+        call_order.append(f"target:{vector_attempt}")
+        return {"selected_target": state["vector_results"][0]}
+
     def fuse(_state):
         call_order.append(f"fusion:{vector_attempt}")
         return {"evidence": []}
@@ -141,6 +152,7 @@ def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
         (question_analyzer, "classify_question", classify),
         (entity_resolver, "resolve_entities", resolve),
         (vector_retriever, "search_vector_evidence", vector),
+        (target_selector, "select_target", select),
         (graph_retriever, "search_graph_evidence", graph),
         (evidence_fusion, "fuse_evidence", fuse),
         (evidence_validator, "validate_evidence_sufficiency", validate),
@@ -161,10 +173,12 @@ def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
         "question",
         "entity",
         "vector:1",
+        "target:1",
         "graph:1",
         "fusion:1",
         "validation:1",
         "vector:2",
+        "target:2",
         "graph:2",
         "fusion:2",
         "validation:2",

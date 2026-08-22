@@ -45,6 +45,8 @@ class VectorHit(TypedDict):
     path: str
     class_name: str | None
     method_name: str | None
+    api_http_method: str | None
+    api_path: str | None
     commit_hash: str
 
 
@@ -79,6 +81,9 @@ class QAState(TypedDict):
 
     # --- ③ Vector Retriever가 채움 ---
     vector_results: NotRequired[list[VectorHit]]
+
+    # --- ④ Target Selector가 채움 ---
+    selected_target: NotRequired[dict | None]
 
     # --- ③ Graph Retriever가 채움 ---
     graph_results: NotRequired[dict]  # app.dtos.chat.GraphData 호환 형태 목표
