@@ -39,21 +39,15 @@ def _route_after_validation(state: QAState) -> str:
 def build_graph():
     """7개 노드를 조립한 LangGraph를 컴파일해서 반환.
 
-    흐름 (docs/langgraph_pipeline.md 1번 섹션 다이어그램과 동일):
-        START -> question_analyzer -> entity_resolver
-            -> vector_retriever \\
-            -> graph_retriever   >-> evidence_fusion -> evidence_validator
+    흐름:
+        START -> question_analyzer -> entity_resolver -> vector_retriever
+            -> graph_retriever -> evidence_fusion -> evidence_validator
         evidence_validator --(근거 부족 & retry_count < MAX_RETRIES)--> vector_retriever로 복귀
         evidence_validator --(충분 또는 재시도 소진)--> response_composer -> END
 
-    알려진 위험(Phase 1에서 실제로 확인 필요): 재시도 루프가 vector_retriever
-    로만 돌아가고 graph_retriever는 다시 안 도는데, evidence_fusion은 두
-    노드(vector_retriever + graph_retriever) 결과를 둘 다 기다렸다가
-    합류(join)하는 구조라서, 재시도 시 evidence_fusion이 다시 안 돌 수도
-    있음. scripts/check_pipeline_skeleton.py의 "재시도 소진까지 도는 경우"
-    시나리오에서 response_composer까지 실제로 도달하는지로 확인할 것 —
-    만약 안 되면 retry 분기 대상을 vector_retriever/graph_retriever 둘 다로
-    바꿔야 함.
+    graph_retriever는 vector_results의 graph_node_id/method_node_id를 탐색
+    시작점으로 사용하므로 반드시 vector_retriever 다음에 실행한다. 재검색도
+    같은 순차 경로 전체를 다시 실행한다.
     """
     graph = StateGraph(QAState)
 
@@ -68,12 +62,9 @@ def build_graph():
     graph.add_edge(START, "question_analyzer")
     graph.add_edge("question_analyzer", "entity_resolver")
 
-    # entity_resolver 뒤에서 벡터 검색 / 그래프 탐색이 병렬로 갈라짐
+    # 그래프 탐색 시작점은 벡터 검색 결과에서 가져오므로 순차 실행한다.
     graph.add_edge("entity_resolver", "vector_retriever")
-    graph.add_edge("entity_resolver", "graph_retriever")
-
-    # 두 검색 결과가 evidence_fusion에서 합류(join)
-    graph.add_edge("vector_retriever", "evidence_fusion")
+    graph.add_edge("vector_retriever", "graph_retriever")
     graph.add_edge("graph_retriever", "evidence_fusion")
 
     graph.add_edge("evidence_fusion", "evidence_validator")
