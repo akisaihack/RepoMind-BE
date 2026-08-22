@@ -7,16 +7,23 @@
 입력: state["evidence"], state["question"]
 출력: state["is_sufficient"], state["retry_count"](증가)
 
-구현 메모 (docs/langgraph_pipeline.md 4.8 참고):
-- 처음엔 휴리스틱으로 시작 가능 (예: evidence 개수 0이면 무조건 부족).
-  나중에 LLM 판단으로 고도화 가능.
+구현 (docs/langgraph_pipeline.md 4.8 / docs/qa_retrieval_part_plan.md Step 6 참고):
+- 휴리스틱: evidence가 1건이라도 있으면 충분(True), 없으면 부족(False).
+  나중에 similarity 임계값이나 LLM 판단으로 고도화 가능(지금은 정보가
+  부족해도 "일단 있는 근거로 답변 시도"가 낫다고 판단 — 완전히 근거가
+  없을 때만 재시도/불확실 처리).
 - retry_count는 app.ai.rag.state.MAX_RETRIES와 비교해서 무한 루프를
-  막는 데 씀 — 이 노드에서 반드시 증가시켜야 함.
+  막는 데 씀 — 이 노드에서 반드시 증가시킴(빠뜨리면 pipeline.py의 조건부
+  분기가 무한 루프에 빠질 위험).
 """
 
 from app.ai.rag.state import QAState
 
 
-def validate_evidence_sufficiency(state: QAState) -> QAState:
+def validate_evidence_sufficiency(state: QAState) -> dict:
     """근거 충분성을 판단해서 state["is_sufficient"]/state["retry_count"]를 채워 반환."""
-    raise NotImplementedError("아직 구현 전 — docs/langgraph_pipeline.md 4.8 참고")
+    evidence = state.get("evidence", [])
+    retry_count = state.get("retry_count", 0) + 1
+    is_sufficient = len(evidence) > 0
+
+    return {"is_sufficient": is_sufficient, "retry_count": retry_count}
