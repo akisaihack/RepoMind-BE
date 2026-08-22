@@ -8,16 +8,26 @@ commit_file_change.py와 동일한 책임 분리 패턴).
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Float, bindparam, cast, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.dtos.chunk import CodeChunk as CodeChunkDTO
-from app.models.code_chunk import CodeChunk
+from app.models.code_chunk import EMBEDDING_DIMENSIONS, CodeChunk
 
 
 class ChunkPersistenceError(Exception):
     """Raised when code chunk persistence fails."""
+
+
+class _PublicVector(Vector):
+    """Render the pgvector type with its extension schema for restricted search paths."""
+
+    cache_ok = True
+
+    def get_col_spec(self, **kw) -> str:
+        return f"public.vector({self.dim})"
 
 
 class CodeChunkRepository:
@@ -83,6 +93,32 @@ class CodeChunkRepository:
             CodeChunk.graph_node_id.in_(graph_node_ids)
         )
         return set(self._session.scalars(statement).all())
+
+    def search_similar(
+        self,
+        query_embedding: list[float],
+        github_repository_id: int,
+        top_k: int = 5,
+    ) -> list[tuple[CodeChunk, float]]:
+        """Return repository-scoped chunks ordered by cosine distance."""
+        if top_k <= 0:
+            raise ValueError("top_k must be positive.")
+
+        query_vector = bindparam(
+            "query_embedding",
+            value=query_embedding,
+            type_=_PublicVector(EMBEDDING_DIMENSIONS),
+        )
+        distance = CodeChunk.embedding.op(
+            "OPERATOR(public.<=>)", return_type=Float
+        )(cast(query_vector, _PublicVector(EMBEDDING_DIMENSIONS))).label("distance")
+        statement = (
+            select(CodeChunk, distance)
+            .where(CodeChunk.github_repository_id == github_repository_id)
+            .order_by(distance)
+            .limit(top_k)
+        )
+        return [(chunk, float(value)) for chunk, value in self._session.execute(statement)]
 
     def _find(self, graph_node_id: str) -> CodeChunk | None:
         statement = select(CodeChunk).where(CodeChunk.graph_node_id == graph_node_id)

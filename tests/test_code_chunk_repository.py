@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock
 
+import pytest
+
 from app.parsers.languages.java import parse_java_file
 from app.repositories.code_chunk import CodeChunkRepository
 from app.services.chunking import build_chunks_from_file
@@ -56,3 +58,19 @@ def test_finds_existing_method_version_chunk_ids() -> None:
     )
 
     assert found == {"version-a", "version-b"}
+
+
+def test_searches_repository_chunks_by_cosine_distance() -> None:
+    session = Mock()
+    chunk = Mock()
+    session.execute.return_value = [(chunk, 0.125)]
+
+    found = CodeChunkRepository(session).search_similar([0.1] * 1536, 100, top_k=3)
+
+    assert found == [(chunk, 0.125)]
+    session.execute.assert_called_once()
+
+
+def test_rejects_non_positive_similarity_limit() -> None:
+    with pytest.raises(ValueError, match="top_k must be positive"):
+        CodeChunkRepository(Mock()).search_similar([0.1] * 1536, 100, top_k=0)
