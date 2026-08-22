@@ -43,7 +43,7 @@ class ResponseInputAdapter:
         return ResponseGenerationInput(
             question=state["question"],
             intent=intent,
-            target=_target_from(state.get("vector_results", [])),
+            target=_target_from(state),
             visualization_required=visualization_type is not None,
             visualization_type=visualization_type,
             context=RetrievedContext(
@@ -54,11 +54,14 @@ class ResponseInputAdapter:
         )
 
 
-def _target_from(vector_results: list[dict]) -> str | None:
-    if not vector_results:
+def _target_from(state: QAState) -> str | None:
+    selected = state.get("selected_target")
+    if selected is None:
+        vector_results = state.get("vector_results", [])
+        selected = vector_results[0] if vector_results else None
+    if selected is None:
         return None
-    first = vector_results[0]
-    return first.get("method_name") or first.get("class_name") or first.get("path")
+    return selected.get("method_name") or selected.get("class_name") or selected.get("path")
 
 
 def _normalize_graph_relations(nodes: list[dict], edges: list[dict]) -> list[dict]:

@@ -16,6 +16,18 @@ app.dtos.question.QuestionKind 값 중 하나를 반환할 것:
 {", ".join(kind.value for kind in QuestionKind)}
 """
 
+TARGET_SELECTION_SYSTEM_PROMPT = """당신은 코드 검색 결과의 분석 대상 선택기입니다.
+사용자 질문을 실제로 처리하는 코드 후보 하나를 반드시 선택하세요.
+메서드명뿐 아니라 HTTP 경로, 코드 내용, 파일 위치를 함께 판단하세요.
+제공된 후보 밖의 대상을 만들지 말고 후보의 0부터 시작하는 인덱스만 선택하세요.
+"""
+
+TARGET_SELECTION_USER_PROMPT = """사용자 질문: {question}
+
+분석 대상 후보:
+{candidates}
+"""
+
 # 답변 생성 공통 프롬프트. LLM은 조회 근거를 설명하는 역할만 맡고,
 # React Flow 데이터는 VisualizationBuilder가 실제 DB 결과로 생성한다.
 RESPONSE_SYSTEM_PROMPT = """당신은 코드베이스 분석 도우미입니다.

@@ -73,6 +73,8 @@ def search_vector_evidence(state: QAState) -> dict:
                 "path": chunk.path,
                 "class_name": chunk.class_name,
                 "method_name": chunk.method_name,
+                "api_http_method": chunk.api_http_method,
+                "api_path": chunk.api_path,
                 "commit_hash": chunk.commit_hash,
             }
             for chunk, distance in hits

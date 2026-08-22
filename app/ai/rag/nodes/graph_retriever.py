@@ -11,7 +11,7 @@
 Step 3 참고):
 1. state["vector_results"]가 비어 있으면 탐색 시작점이 없으므로
    {"graph_results": {"nodes": [], "edges": []}}을 바로 반환 (방어적 처리).
-2. 시작점은 state["vector_results"][0](유사도 1위 결과)에서 뽑음.
+2. 시작점은 Target Selector가 고른 state["selected_target"]에서 뽑음.
    entity_candidates는 MVP에서는 참고만(현재 entity_resolver가 빈 리스트를
    반환하므로 사실상 안 씀).
 3. state.get("question_kind")에 따라 app.graph.queries.traversal의 함수 중
@@ -59,17 +59,19 @@ _DEFAULT_START_ID_FIELD = "method_node_id"
 
 def search_graph_evidence(state: QAState) -> dict:
     """시작 노드를 골라 Neo4j를 탐색해서 state["graph_results"]를 채워 반환."""
-    vector_results = state.get("vector_results", [])
-    if not vector_results:
+    selected_target = state.get("selected_target")
+    if selected_target is None:
+        vector_results = state.get("vector_results", [])
+        selected_target = vector_results[0] if vector_results else None
+    if selected_target is None:
         return {"graph_results": {"nodes": [], "edges": []}}
 
-    vector_hit = vector_results[0]
     question_kind = QuestionKind(state.get("question_kind", QuestionKind.LOCATION))
     strategy = _STRATEGY_BY_QUESTION_KIND.get(question_kind, traversal.shallow_neighborhood)
     start_id_field = _START_ID_FIELD_BY_QUESTION_KIND.get(
         question_kind, _DEFAULT_START_ID_FIELD
     )
-    start_node_id = vector_hit[start_id_field]
+    start_node_id = selected_target[start_id_field]
 
     with Neo4jClient.from_config(current_app.config) as client:
         graph_results = strategy(client, start_node_id)
