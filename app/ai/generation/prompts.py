@@ -5,14 +5,15 @@
 파이프라인 로직 코드를 건드리지 않아도 되게 하기 위함.
 """
 
+from app.dtos.question import QuestionKind
 from app.dtos.response_generation import QueryIntent
 
 # 질문 유형 분류 프롬프트 (question_analyzer.py에서 사용 예정)
 # 4가지 유형: intent | impact | location | flow
-QUESTION_CLASSIFICATION_PROMPT = """아직 작성 전.
+QUESTION_CLASSIFICATION_PROMPT = f"""아직 작성 전.
 
-app/dtos/chat.py의 ChatRequest.question_kind 값 집합과 반드시 맞출 것:
-"intent" | "impact" | "location" | "flow"
+app.dtos.question.QuestionKind 값 중 하나를 반환할 것:
+{", ".join(kind.value for kind in QuestionKind)}
 """
 
 # 답변 생성 공통 프롬프트. LLM은 조회 근거를 설명하는 역할만 맡고,

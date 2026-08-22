@@ -1,7 +1,9 @@
 """Data Transfer Objects for Chat Query API."""
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Literal
+
+from app.dtos.question import QuestionKind
 
 
 @dataclass
@@ -14,10 +16,10 @@ class ChatRequest:
     </pre>
     
     @param question 사용자가 입력한 실제 질문 텍스트
-    @param question_kind 프론트엔드에서 추론하여 넘겨준 질문의 유형 (intent, impact, location, flow 등)
+    @param question_kind 프론트엔드 또는 질문 분석기가 결정한 질문 유형
     """
     question: str
-    question_kind: Optional[Literal["intent", "impact", "location", "flow"]] = None
+    question_kind: QuestionKind | None = None
 
 
 @dataclass
@@ -25,7 +27,7 @@ class GraphNode:
     id: str
     type: Literal["api", "symbol"]
     label: str
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 @dataclass
@@ -50,7 +52,7 @@ class Evidence:
     title: str
     location: str
     description: str
-    excerpt: Optional[str] = None
+    excerpt: str | None = None
 
 
 @dataclass
@@ -93,4 +95,3 @@ class ChatResponseData:
     graph: GraphData
     uncertainties: list[str] = field(default_factory=list)
     suggestedQuestions: list[str] = field(default_factory=list)
-

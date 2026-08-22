@@ -1,5 +1,6 @@
 """Tests for Chat Query API endpoint."""
 
+
 def test_chat_query(client):
     """Test submitting a chat query and receiving a structured answer."""
     session_id = "test_session_123"
@@ -23,3 +24,13 @@ def test_chat_query(client):
     assert "graph" in response_data
     assert isinstance(response_data["graph"]["nodes"], list)
     assert isinstance(response_data["graph"]["edges"], list)
+
+
+def test_chat_query_rejects_unknown_question_kind(client):
+    response = client.post(
+        "/api/v1/sessions/test_session_123/chat",
+        json={"question": "호출 흐름을 알려줘", "question_kind": "unknown"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "INVALID_QUESTION_KIND"

@@ -42,17 +42,18 @@ from flask import current_app
 
 from app.ai.rag.state import QAState
 from app.clients.neo4j import Neo4jClient
+from app.dtos.question import QuestionKind
 from app.graph.queries import traversal
 
 _STRATEGY_BY_QUESTION_KIND = {
-    "flow": traversal.calls_forward,
-    "impact": traversal.calls_backward,
-    "intent": traversal.changed_by_history,
+    QuestionKind.FLOW: traversal.calls_forward,
+    QuestionKind.IMPACT: traversal.calls_backward,
+    QuestionKind.INTENT: traversal.changed_by_history,
 }
 
 # flow만 "정확히 매칭된 그 버전"(graph_node_id)에서 출발하고, 나머지는 전부
 # 버전과 무관한 "메서드 자체"(method_node_id)에서 출발한다.
-_START_ID_FIELD_BY_QUESTION_KIND = {"flow": "graph_node_id"}
+_START_ID_FIELD_BY_QUESTION_KIND = {QuestionKind.FLOW: "graph_node_id"}
 _DEFAULT_START_ID_FIELD = "method_node_id"
 
 
@@ -63,7 +64,7 @@ def search_graph_evidence(state: QAState) -> dict:
         return {"graph_results": {"nodes": [], "edges": []}}
 
     vector_hit = vector_results[0]
-    question_kind = state.get("question_kind")
+    question_kind = QuestionKind(state.get("question_kind", QuestionKind.LOCATION))
     strategy = _STRATEGY_BY_QUESTION_KIND.get(question_kind, traversal.shallow_neighborhood)
     start_id_field = _START_ID_FIELD_BY_QUESTION_KIND.get(
         question_kind, _DEFAULT_START_ID_FIELD
