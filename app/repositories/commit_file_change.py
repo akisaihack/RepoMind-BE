@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.dtos.github import CommitDTO
 from app.models.commit_file_change import CommitFileChange, CommitFileChangeHunk
@@ -68,6 +68,21 @@ class CommitFileChangeRepository:
             raise FileChangePersistenceError("Failed to persist Commit file changes.") from exc
 
         return identifiers
+
+    def list_for_repository(self, github_repository_id: int) -> list[CommitFileChange]:
+        """레포의 모든 커밋 파일 변경 이력 + hunks를 조회.
+
+        scripts/link_changed_by.py(신규 배치 스크립트, Method<->Commit을
+        CHANGED_BY 관계로 잇기 위한 원본 데이터 조회용)가 사용. 기존
+        upsert_changes()/_find()와 달리 조회 전용이라 읽기 전용 세션으로도
+        호출 가능 — 커밋/롤백 로직 없음.
+        """
+        statement = (
+            select(CommitFileChange)
+            .where(CommitFileChange.github_repository_id == github_repository_id)
+            .options(selectinload(CommitFileChange.hunks))
+        )
+        return list(self._session.scalars(statement))
 
     def _find(
         self,

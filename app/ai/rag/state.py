@@ -26,9 +26,18 @@ class EntityCandidate(TypedDict):
 
 
 class VectorHit(TypedDict):
-    """Vector Retriever가 pgvector에서 찾은 청크 검색 결과 하나."""
+    """Vector Retriever가 pgvector에서 찾은 청크 검색 결과 하나.
+
+    graph_node_id / method_node_id 구분 (2026-08-22, MethodVersion 스키마
+    반영): graph_node_id는 벡터로 매칭된 "그 시점의 정확한 코드 버전"
+    (Neo4j MethodVersion 노드) key, method_node_id는 버전과 무관한
+    "메서드 자체"(Neo4j Method 노드) key. graph_retriever.py가 질문
+    유형에 따라 둘 중 하나를 골라 그래프 탐색 시작점으로 씀 — 자세한 이유는
+    docs/qa_retrieval_part_plan.md의 "0-2" 섹션 참고.
+    """
 
     graph_node_id: str
+    method_node_id: str
     text: str
     similarity: float
     path: str
