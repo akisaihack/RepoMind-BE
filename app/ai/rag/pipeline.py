@@ -1,12 +1,7 @@
 """LangGraph StateGraph 조립 + 컴파일 + 실행 진입점.
 
-Phase 1(배관 검증) 완료: 노드 7개는 아직 nodes/*.py에서 전부
-NotImplementedError를 던지는 상태지만, 그래프 구조(순서/병렬 분기/조건부
-루프) 자체는 여기서 실제로 조립된다. 노드 내용은 Phase 3에서 하나씩
-채운다 — 이 파일은 그때도 그대로 재사용됨.
-
 배관만 따로 검증하고 싶으면 scripts/check_pipeline_skeleton.py를 실행할 것
-(7개 노드를 임시로 monkeypatch해서 그래프가 끝까지 도는지 확인).
+(노드를 임시로 monkeypatch해서 그래프가 끝까지 도는지 확인).
 
 pip install -e '.[dev,postgres]'로 langgraph 패키지를 설치해야 이 파일의
 import가 동작함 (pyproject.toml에 이미 추가해둠).
@@ -23,7 +18,8 @@ from app.ai.rag.nodes import (
     response_composer,
     vector_retriever,
 )
-from app.ai.rag.state import MAX_RETRIES, QAState
+from app.ai.rag.state import MAX_RETRIES, QAState, QueryResponseState
+from app.dtos.question import QuestionKind
 
 
 def _route_after_validation(state: QAState) -> str:
@@ -100,11 +96,12 @@ def run_qa_pipeline(
     question: str,
     github_repository_id: int,
     conversation_id: str | None = None,
-) -> dict:
-    """파이프라인 진입점. 초기 QAState를 만들고 컴파일된 그래프를 실행해서
-    최종 answer(ChatResponseData 호환 dict)를 꺼내 반환.
+    question_kind: QuestionKind | str | None = None,
+) -> QueryResponseState:
+    """Run the pipeline and return the final QueryResponse-compatible dictionary.
 
-    app/services/qa_service.py가 이 함수를 호출함.
+    ``question_kind`` may be supplied by the caller. If omitted, Question Analyzer
+    is responsible for classifying it before retrieval.
     """
     compiled = build_graph()
 
@@ -114,9 +111,11 @@ def run_qa_pipeline(
         "conversation_id": conversation_id,
         "retry_count": 0,
     }
+    if question_kind is not None:
+        initial_state["question_kind"] = QuestionKind(question_kind)
 
     final_state = compiled.invoke(initial_state)
-    return final_state.get("answer", {})
+    return final_state["answer"]
 
 
 __all__ = [

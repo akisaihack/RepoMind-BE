@@ -3,9 +3,9 @@
 각 노드는 이 State를 입력받아 자기 책임인 필드만 채워서 반환한다. 필드
 목록/설명은 docs/langgraph_pipeline.md의 4.1 섹션과 항상 동기화할 것.
 
-설계 원칙: graph_results/evidence/answer는 app/dtos/chat.py의
-GraphData/Evidence/ChatResponseData와 필드가 호환되도록 맞춘다 — 파이프라인
-결과를 API 응답으로 바꿀 때 변환 로직을 최소화하기 위함.
+설계 원칙: 검색 노드는 graph_results/evidence를 조회 결과 형태로 유지하고,
+Response Composer가 이를 내부 응답 입력 DTO로 변환한 뒤 최종 QueryResponse
+호환 딕셔너리를 answer에 저장한다.
 """
 
 from typing import NotRequired, TypedDict
@@ -48,6 +48,14 @@ class VectorHit(TypedDict):
     commit_hash: str
 
 
+class QueryResponseState(TypedDict):
+    """JSON-compatible final response produced by Response Composer."""
+
+    answer: str
+    intent: str
+    visualization: dict | None
+
+
 class QAState(TypedDict):
     """파이프라인 전체에서 공유되는 상태.
 
@@ -83,4 +91,4 @@ class QAState(TypedDict):
     retry_count: NotRequired[int]
 
     # --- ⑥ Response Composer가 채움 (최종 출력) ---
-    answer: NotRequired[dict]  # app.dtos.chat.ChatResponseData 호환 형태 목표
+    answer: NotRequired[QueryResponseState]
