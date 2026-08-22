@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.ai.rag.state import QAState
+from app.dtos.question import QuestionKind
 from app.dtos.response_generation import (
     QueryIntent,
     ResponseGenerationInput,
@@ -12,16 +13,16 @@ from app.dtos.response_generation import (
 )
 
 _INTENT_BY_QUESTION_KIND = {
-    "flow": QueryIntent.FLOW,
-    "impact": QueryIntent.DEPENDENCY,
-    "intent": QueryIntent.HISTORY,
-    "location": QueryIntent.EXPLANATION,
+    QuestionKind.FLOW: QueryIntent.FLOW,
+    QuestionKind.IMPACT: QueryIntent.DEPENDENCY,
+    QuestionKind.INTENT: QueryIntent.HISTORY,
+    QuestionKind.LOCATION: QueryIntent.EXPLANATION,
 }
 
 _VISUALIZATION_BY_QUESTION_KIND = {
-    "flow": VisualizationType.CALL_FLOW,
-    "impact": VisualizationType.DEPENDENCY,
-    "intent": VisualizationType.CHANGE_HISTORY,
+    QuestionKind.FLOW: VisualizationType.CALL_FLOW,
+    QuestionKind.IMPACT: VisualizationType.DEPENDENCY,
+    QuestionKind.INTENT: VisualizationType.CHANGE_HISTORY,
 }
 
 
@@ -33,8 +34,8 @@ class ResponseInputAdapter:
 
     def adapt_qa_state(self, state: QAState) -> ResponseGenerationInput:
         """Adapt the current LangGraph retrieval state into the stable boundary DTO."""
-        question_kind = state.get("question_kind", "location")
-        intent = _INTENT_BY_QUESTION_KIND.get(question_kind, QueryIntent.EXPLANATION)
+        question_kind = QuestionKind(state.get("question_kind", QuestionKind.LOCATION))
+        intent = _INTENT_BY_QUESTION_KIND[question_kind]
         visualization_type = _VISUALIZATION_BY_QUESTION_KIND.get(question_kind)
         graph_results = state.get("graph_results", {}) or {}
         graph_nodes = graph_results.get("nodes", [])

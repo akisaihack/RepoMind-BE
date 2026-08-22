@@ -10,6 +10,8 @@ GraphData/Evidence/ChatResponseData와 필드가 호환되도록 맞춘다 — �
 
 from typing import NotRequired, TypedDict
 
+from app.dtos.question import QuestionKind
+
 # Evidence Validator가 재검색으로 돌아갈 수 있는 최대 횟수. 이 값을 넘기면
 # 근거가 부족해도 강제로 Response Composer로 넘어가서 "확정 어려움"을
 # 포함한 답변을 만든다 (무한 루프 방지).
@@ -62,7 +64,7 @@ class QAState(TypedDict):
     # --- ① Question Analyzer가 채움 ---
     # 프론트가 ChatRequest.question_kind로 이미 넘겨줄 수도 있음 — 그 경우
     # 이 노드는 검증만 하거나 스킵.
-    question_kind: NotRequired[str]  # "intent" | "impact" | "location" | "flow"
+    question_kind: NotRequired[QuestionKind]
 
     # --- ② Entity Resolver가 채움 ---
     entity_candidates: NotRequired[list[EntityCandidate]]
