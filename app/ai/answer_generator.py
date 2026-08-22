@@ -10,6 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 
+from app.ai.generation.context_builder import LLMContextBuilder
 from app.ai.generation.prompts import (
     RESPONSE_INTENT_INSTRUCTIONS,
     RESPONSE_SYSTEM_PROMPT,
@@ -25,22 +26,28 @@ class AnswerGenerationError(Exception):
 
 
 class AnswerGenerator:
-    def __init__(self, llm: BaseLanguageModel | Runnable[Any, Any]) -> None:
+    def __init__(
+        self,
+        llm: BaseLanguageModel | Runnable[Any, Any],
+        context_builder: LLMContextBuilder | None = None,
+    ) -> None:
         prompt = ChatPromptTemplate.from_messages(
             [("system", RESPONSE_SYSTEM_PROMPT), ("human", RESPONSE_USER_PROMPT)]
         )
         self._chain = prompt | llm | StrOutputParser()
+        self._context_builder = context_builder or LLMContextBuilder()
 
     def generate(self, input_data: ResponseGenerationInput) -> str:
         """Generate only prose; visualization is deliberately handled elsewhere."""
+        context = self._context_builder.build(input_data)
         values = {
             "question": input_data.question,
             "intent": input_data.intent.value,
             "target": input_data.target or "지정되지 않음",
             "intent_instruction": RESPONSE_INTENT_INSTRUCTIONS[input_data.intent],
-            "code_context": _serialize(input_data.context.code),
-            "graph_context": _serialize(input_data.context.graph),
-            "history_context": _serialize(input_data.context.history),
+            "code_context": _serialize(context.code),
+            "graph_context": _serialize(context.relations),
+            "history_context": _serialize(context.history),
         }
         try:
             answer = self._chain.invoke(values).strip()
@@ -51,10 +58,14 @@ class AnswerGenerator:
         return answer
 
 
-def _serialize(value: list[dict[str, Any]]) -> str:
+def _serialize(value: list[Any]) -> str:
     if not value:
         return "조회 결과 없음"
-    return json.dumps(value, ensure_ascii=False, default=str, indent=2)
+    serializable = [
+        item.model_dump(exclude_none=True) if hasattr(item, "model_dump") else item
+        for item in value
+    ]
+    return json.dumps(serializable, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
 def create_azure_answer_generator(config: Mapping[str, Any]) -> AnswerGenerator:
