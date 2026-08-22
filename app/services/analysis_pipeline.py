@@ -58,6 +58,7 @@ class AnalysisPipelineService:
                 self._code_graph_import.import_repository(
                     github_repository_id=github_repo_id,
                     repository_path=repo_path,
+                    commit_hash=commit_hash,
                 )
                 
                 # 5. Import and embed chunks into pgvector
@@ -83,4 +84,3 @@ class AnalysisPipelineService:
             except Exception as transition_exc:
                 logger.error(f"Failed to transition status to failed: {transition_exc}")
             raise
-
