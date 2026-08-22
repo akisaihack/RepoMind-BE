@@ -146,7 +146,7 @@ MethodVersion이 생기고, 그 버전을 도입한 커밋이 `INTRODUCED_IN`으
 안에서 끝나는 변경이라 **그래프 담당자 승인 없이 진행 가능**(새 관계 타입을
 공유 Neo4j에 쓰는 게 아니라, 팀원이 이미 만들어 둔 관계를 읽기만 하니까).
 
-### 제안하는 수정 (아직 코드 반영 안 함 — 승인 대기)
+### 제안하는 수정 — ✅ 2026-08-22 전부 반영 + mock 검증 완료
 
 1. **`app/ai/rag/state.py`**: `VectorHit`에 `method_node_id: str` 필드 추가.
 2. **`app/ai/rag/nodes/vector_retriever.py`**: 반환 dict에
@@ -197,15 +197,106 @@ MethodVersion이 생기고, 그 버전을 도입한 커밋이 `INTRODUCED_IN`으
 
 ### 이번 재분석으로 바뀐 우선순위
 
-1. **rebase 마무리** — `git rebase --continue`(아래 git 안내 참고), 남은 pick
-   충돌 여부 확인
-2. **버그 수정**: 위 "제안하는 수정" 1~4번 (특히 `impact` 질문이 지금 항상
-   빈 결과 나오는 문제) — mock 재검증까지
-3. **`changed_by_history` 재작성**: `CHANGED_BY` 배치 없이 바로 동작하게
-   교체 — mock 검증
-4. Step 7(`question_analyzer.py`)은 순서상 그대로 마지막
-5. `scripts/link_changed_by.py`/`CHANGED_BY_RELATIONSHIP_TYPE`은 보류(당장
+1. ~~**rebase 마무리**~~ — ✅ 완료(2026-08-22)
+2. ~~**버그 수정**: 위 "제안하는 수정" 1~4번~~ — ✅ 완료 + mock 검증 통과
+   (2026-08-22, 아래 0-3 참고)
+3. ~~**`changed_by_history` 재작성**~~ — ✅ 완료(위와 같이 반영됨)
+4. **다음 할 일**: 실 데이터(pgvector/Neo4j)로 재검증 — 0-3 섹션 가이드
+   참고
+5. Step 7(`question_analyzer.py`)은 순서상 그대로 마지막
+6. `scripts/link_changed_by.py`/`CHANGED_BY_RELATIONSHIP_TYPE`은 보류(당장
    손 안 댐, 필요해지면 그때 line_number 조회 부분만 고쳐서 되살림)
+
+---
+
+## 0-3. 실 데이터 테스트 가이드 (2026-08-22 — 다음 세션은 여기부터)
+
+지금까지는 전부 mock(가짜 데이터)으로만 로직을 검증했음. 여기서부터는 진짜
+pgvector/Neo4j에 데이터를 넣고, 진짜 질문을 던져서 결과를 눈으로 확인하는
+단계. **순서대로** 진행할 것 — 앞 단계가 안 되면 뒷 단계는 의미 없음.
+
+### 0단계 — 인프라/환경 확인 (막혀 있으면 나머지 전부 불가능)
+
+- [ ] `.env`에 아래 값이 실제 값으로 채워져 있는지 확인(더미값 아님):
+  `DATABASE_URL`, `NEO4J_URI`/`NEO4J_USERNAME`/`NEO4J_PASSWORD`,
+  `AZURE_OPENAI_ENDPOINT`/`AZURE_OPENAI_API_KEY`/`AZURE_OPENAI_EMBEDDING_DEPLOYMENT`,
+  `GITHUB_TOKEN`/`GITHUB_REPOSITORY_OWNER`/`GITHUB_REPOSITORY_NAME`
+- [ ] pgvector `CREATE EXTENSION` 권한 풀렸는지 확인(예전에 `team2db`에서
+  막혀 있었음) — 안 풀렸으면 이 단계에서 더 못 감, 관리자에게 먼저 확인
+- [ ] 마이그레이션 적용: `flask --app wsgi db upgrade` (code_chunks 테이블에
+  이번에 팀원이 추가한 `method_node_id`/`content_hash` 컬럼까지 포함해서
+  최신 상태인지 확인)
+- [ ] Neo4j 접속 확인 — `.env`의 `NEO4J_URI`가 로컬(`neo4j://localhost:7687`)인지
+  공유 서버 주소인지 재확인
+
+### 1단계 — 데이터 적재 (pgvector + Neo4j)
+
+테스트 대상 레포를 로컬에 clone해둔 상태에서, **같은 커밋 하나**를 기준으로
+아래 두 개를 순서 상관없이 둘 다 실행(둘 다 `--commit-hash`가 같아야
+벡터 결과와 그래프 결과가 서로 맞물림):
+
+```
+python scripts/import_chunks.py --github-repository-id <REPO_ID> --repository-path "<로컬 clone 경로>" --commit-hash <커밋 SHA>
+
+python scripts/import_code_graph.py --github-repository-id <REPO_ID> --repository-path "<로컬 clone 경로>" --commit-hash <커밋 SHA>
+```
+
+- `<REPO_ID>`는 실제 GitHub 레포 id(더미값 금지 — 코드 여기저기서 이 값 기준으로 조회함)
+- `import_code_graph.py`는 기본적으로 GitHub API로 origin이 `<REPO_ID>`와
+  실제로 일치하는지 검증함 — 테스트용으로 가짜 레포 id를 쓰고 싶으면
+  `--skip-repository-validation` 옵션 추가
+- 끝나면 각각 "Chunk import: OK" / "Code graph import: OK" 비슷한 메시지가
+  뜸(실패하면 에러 메시지에 원인이 나옴)
+
+**(선택, `intent` 질문까지 테스트하고 싶으면)** GitHub 이력도 적재:
+
+```
+python scripts/import_github_history.py
+```
+
+- 인자 없음 — `.env`의 `GITHUB_REPOSITORY_OWNER`/`GITHUB_REPOSITORY_NAME`
+  기준으로 동작함
+- 이게 돌아야 Commit 노드에 실제 커밋 메시지/작성자 등이 채워짐 — 안
+  돌리면 `changed_by_history()`가 Commit 노드는 찾아도 내용이 빈약함
+
+### 2단계 — `scripts/check_my_part.py`로 내 파트만 직접 실행
+
+레포/그래프 적재가 끝났으면, 질문 유형 4개(`flow`/`impact`/`location`/`intent`)를
+하나씩 바꿔가며 돌려보는 게 제일 빠름:
+
+```
+python scripts/check_my_part.py --github-repository-id <REPO_ID> --question "회원 탈퇴는 어떻게 처리돼?" --question-kind flow
+
+python scripts/check_my_part.py --github-repository-id <REPO_ID> --question "이 메서드를 누가 호출해?" --question-kind impact
+
+python scripts/check_my_part.py --github-repository-id <REPO_ID> --question "이 코드가 어디 있어?" --question-kind location
+
+python scripts/check_my_part.py --github-repository-id <REPO_ID> --question "이 로직이 왜 이렇게 바뀌었어?" --question-kind intent
+```
+
+**뭘 확인하면 되는지:**
+- ① `entity_resolver`는 항상 빈 리스트 — 정상(의도한 동작)
+- ② `vector_retriever` 출력에 질문이랑 그럴듯하게 관련된 코드가 top-5로
+  나오는지, `similarity` 값이 1에 가까운(0.7~0.9대) 게 있는지
+- ③ `graph_retriever` 출력(`nodes`/`edges`)이 **`impact`에서도 이제 빈
+  배열이 아니라 실제로 뭔가 나오는지**(이게 이번에 고친 버그) — `intent`도
+  Commit 노드가 나오는지
+- ④ `evidence_fusion`이 vector+graph 합쳐서 근거 리스트를 만드는지, 중복
+  없이 나오는지
+- ⑤ `evidence_validator`의 `is_sufficient`가 `True`로 나오는지
+- 최종 요약에 "근거 N건, is_sufficient=True"가 찍히면 그 질문 유형은
+  정상 동작하는 것
+
+**결과가 이상하면**: 스크립트 출력 그대로(에러 스택트레이스 포함) 캡처해서
+알려주면 같이 원인 봐줄게 — 인프라 문제(연결 안 됨)인지, 데이터가 아예
+안 들어갔는지, 로직 버그인지 구분이 필요해서.
+
+### 3단계 — 남은 것
+
+- 위 테스트 다 정상이면 Step 1~6은 실 데이터 기준으로도 완료로 확정
+- Step 7(`question_analyzer.py`)만 남음 — 이건 별도로 진행(팀원과
+  `ChatCompletionService` 먼저 조율)
+- `scripts/link_changed_by.py`는 계속 보류(0-2 참고, 지금은 불필요)
 
 ---
 
@@ -639,7 +730,7 @@ def classify_question(state: QAState) -> dict:
 - [x] `CodeChunkRepository.search_similar()` 추가 — mock 검증 완료, 실 데이터 검증은 pgvector 열리면
 - [x] `app/graph/queries/traversal.py` 4개 탐색 함수 작성 — mock 검증 완료(⚠️ 2026-08-22: MethodVersion 스키마 반영 위해 재작성 필요, 0-2 참고)
 - [x] `vector_retriever.py` / `graph_retriever.py` / `entity_resolver.py` / `evidence_fusion.py` / `evidence_validator.py` 전부 `NotImplementedError` 제거
-- [ ] **(신규)** `method_node_id` 반영 + `calls_backward` 버그 수정 + `changed_by_history` 재작성 (0-2 참고)
+- [x] **(신규)** `method_node_id` 반영 + `calls_backward` 버그 수정 + `changed_by_history` 재작성 — mock 검증 완료(0-2 참고), 실 데이터 검증은 0-3 가이드대로
 - [ ] `question_analyzer.py` + `ChatCompletionService` + `QUESTION_CLASSIFICATION_PROMPT` 구현
 - [ ] `app/config.py`에 `AZURE_OPENAI_DEPLOYMENT`/`AZURE_OPENAI_NANO_DEPLOYMENT` 추가 (Step 7과 같이 진행)
 - [ ] `run_qa_pipeline()`을 직접 호출해서 `state["evidence"]`/`question_kind`/`is_sufficient`가 팀원과 합의한 형태로 채워지는지 확인 (Step 7 끝난 뒤)

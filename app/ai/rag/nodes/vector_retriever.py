@@ -1,8 +1,8 @@
 """③ 벡터 검색 (Vector Retriever) 노드.
 
 역할: 질문을 임베딩해서 pgvector(code_chunks 테이블)에서 의미상 유사한
-코드 청크를 top-k 검색. 결과의 graph_node_id가 다음 단계(Graph Retriever)의
-시작점이 됨 — Hybrid RAG의 핵심 다리.
+코드 청크를 top-k 검색. 결과의 graph_node_id/method_node_id가 다음 단계
+(Graph Retriever)의 시작점이 됨 — Hybrid RAG의 핵심 다리.
 
 입력: state["question"], state["github_repository_id"]
 출력: state["vector_results"]
@@ -25,6 +25,13 @@ Step 2 참고):
 
 에러 처리: 별도로 감싸지 않고 EmbeddingService/SQLAlchemy가 던지는 예외를
 그대로 전파 (기존 코드베이스 패턴과 일치, 읽기 전용이라 롤백 로직 불필요).
+
+2026-08-22 업데이트 (MethodVersion 스키마 반영): 팀원이 머지한 버전 관리
+스키마 때문에 CodeChunk.graph_node_id는 이제 Method가 아니라 그 시점의
+MethodVersion을 가리킴. 대신 CodeChunk에 method_node_id(버전과 무관한
+안정적인 Method key)가 새로 생겼음. graph_retriever.py가 질문 유형에 따라
+둘 중 하나를 골라 써야 해서, 여기서 둘 다 결과에 담아 넘겨줌. 자세한 배경은
+docs/qa_retrieval_part_plan.md "0-2" 섹션 참고.
 
 참고: 2026-08-16 기준 pgvector CREATE EXTENSION이 team2db에서 권한 문제로
 막혀 있음(관리자 조치 대기) — 이게 풀려야 실 데이터로 end-to-end 테스트
@@ -60,6 +67,7 @@ def search_vector_evidence(state: QAState) -> dict:
         "vector_results": [
             {
                 "graph_node_id": chunk.graph_node_id,
+                "method_node_id": chunk.method_node_id,
                 "text": chunk.text,
                 "similarity": 1 - distance,
                 "path": chunk.path,

@@ -11,12 +11,17 @@
   graph_results["nodes"](Neo4j 탐색 노드)를 각각 app.dtos.chat.Evidence
   호환 dict(id, type, title, location, description, excerpt)로 변환해서
   합침.
-- type은 지금은 전부 "code"로 고정 — vector/graph 둘 다 코드 근거만
-  다루기 때문(CHANGED_BY 배치가 아직 실행 전이라 "commit"/"itsm" 타입
-  근거는 아직 안 나옴. 나중에 graph_results에 Commit/Issue 노드가 섞여
-  들어오면 여기서 타입 분기 추가 필요).
 - id(=graph_node_id) 기준으로 중복 제거 — 같은 메서드가 vector 검색과
   graph 탐색 양쪽에서 다 나올 수 있음(예: 시작점 노드 자신).
+
+2026-08-22 업데이트 (MethodVersion 스키마 반영): graph_results의 노드
+type은 이제 "api"/"symbol"뿐 아니라 "commit"도 나올 수 있음
+(app/graph/queries/traversal.py의 changed_by_history가 CHANGED_BY 배치
+작업 없이 Commit 노드를 직접 돌려주게 바뀌었음 — docs/qa_retrieval_part_plan.md
+"0-2" 참고). type이 "commit"이면 Evidence.type도 "commit"으로 매핑하고,
+그 외(api/symbol)는 지금까지처럼 "code"로 둠(app/dtos/chat.py의
+Evidence.type이 Literal["code", "itsm", "commit"]이라 "commit"은 이미
+허용된 값).
 """
 
 from app.ai.rag.state import QAState
@@ -47,7 +52,7 @@ def fuse_evidence(state: QAState) -> dict:
         evidence.append(
             {
                 "id": node_id,
-                "type": "code",
+                "type": "commit" if node.get("type") == "commit" else "code",
                 "title": node.get("label", node_id),
                 "location": node.get("detail") or "",
                 "description": node.get("label", ""),
