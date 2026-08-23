@@ -1,9 +1,12 @@
 """Session-scoped orchestration service for repository Q&A."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.ai.rag.pipeline import run_qa_pipeline
+from app.adapters.qa_response_adapter import QAResponseAdapter
+from app.ai.rag.pipeline import run_qa_pipeline_state
+from app.ai.rag.state import QAState
 from app.dtos.chat import ChatRequest, ChatResponseData
 from app.models.repository import RepositoryAnalysisStatus
 from app.repositories.chat_session import ChatSessionStore
@@ -31,8 +34,16 @@ class QAExecutionContext:
 
 
 class QAService:
-    def __init__(self, chat_session_store: ChatSessionStore) -> None:
+    def __init__(
+        self,
+        chat_session_store: ChatSessionStore,
+        *,
+        pipeline_runner: Callable[..., QAState] = run_qa_pipeline_state,
+        response_adapter: QAResponseAdapter | None = None,
+    ) -> None:
         self._chat_session_store = chat_session_store
+        self._pipeline_runner = pipeline_runner
+        self._response_adapter = response_adapter or QAResponseAdapter()
 
     def get_execution_context(self, session_id: UUID) -> QAExecutionContext:
         """Resolve and validate the repository identity for a chat session.
@@ -61,15 +72,16 @@ class QAService:
             github_repository_id=repository.github_repository_id,
         )
 
-    def ask(self, session_id: str, request: ChatRequest) -> ChatResponseData:
-        """질문을 받아 파이프라인을 실행하고 ChatResponseData를 반환.
-
-        app/api/v1/chat.py의
-        `# TODO: 실제 RAG 파이프라인 연동 시 아래 목(Mock) 데이터를 삭제하고
-        실제 생성 로직으로 교체` 자리에서 이 메서드를 호출하도록 교체하면 됨
-        (get_mock_chat_response() 대신 이 메서드 호출).
-        """
-        raise NotImplementedError("아직 구현 전 — docs/langgraph_pipeline.md 4.11 참고")
+    def ask(self, session_id: UUID, request: ChatRequest) -> ChatResponseData:
+        """Classify, retrieve, and adapt one question for an existing chat session."""
+        context = self.get_execution_context(session_id)
+        final_state = self._pipeline_runner(
+            question=request.question,
+            github_repository_id=context.github_repository_id,
+            conversation_id=str(context.session_id),
+            question_kind=request.question_kind,
+        )
+        return self._response_adapter.adapt(final_state, final_state["answer"])
 
 
 __all__ = [
@@ -78,5 +90,5 @@ __all__ = [
     "QARepositoryNotReadyError",
     "QASessionNotFoundError",
     "QAService",
-    "run_qa_pipeline",
+    "run_qa_pipeline_state",
 ]

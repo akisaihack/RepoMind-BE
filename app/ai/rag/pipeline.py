@@ -97,6 +97,27 @@ def run_qa_pipeline(
     ``question_kind`` may be supplied by the caller. If omitted, Question Analyzer
     is responsible for classifying it before retrieval.
     """
+    final_state = run_qa_pipeline_state(
+        question=question,
+        github_repository_id=github_repository_id,
+        conversation_id=conversation_id,
+        question_kind=question_kind,
+    )
+    return final_state["answer"]
+
+
+def run_qa_pipeline_state(
+    question: str,
+    github_repository_id: int,
+    conversation_id: str | None = None,
+    question_kind: QuestionKind | str | None = None,
+) -> QAState:
+    """Run the pipeline and return its completed state for response adaptation.
+
+    ``run_qa_pipeline`` remains the compatibility entry point for callers that
+    need only the final answer. The service layer uses this variant because the
+    public chat response also needs evidence and graph retrieval results.
+    """
     compiled = build_graph()
 
     initial_state: QAState = {
@@ -108,8 +129,7 @@ def run_qa_pipeline(
     if question_kind is not None:
         initial_state["question_kind"] = QuestionKind(question_kind)
 
-    final_state = compiled.invoke(initial_state)
-    return final_state["answer"]
+    return compiled.invoke(initial_state)
 
 
 __all__ = [
@@ -123,6 +143,7 @@ __all__ = [
     "question_analyzer",
     "response_composer",
     "run_qa_pipeline",
+    "run_qa_pipeline_state",
     "target_selector",
     "vector_retriever",
 ]

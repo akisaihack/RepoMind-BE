@@ -13,7 +13,7 @@ from app.ai.rag.nodes import (
     target_selector,
     vector_retriever,
 )
-from app.ai.rag.pipeline import run_qa_pipeline
+from app.ai.rag.pipeline import run_qa_pipeline, run_qa_pipeline_state
 from app.dtos.question import QuestionKind
 
 
@@ -100,6 +100,30 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
     ]
 
 
+def test_pipeline_state_keeps_evidence_and_graph_for_chat_response_adaptation() -> None:
+    state = {
+        "question": "코드는 어디에 있어?",
+        "github_repository_id": 1,
+        "question_kind": QuestionKind.LOCATION,
+        "vector_results": [],
+        "graph_results": {"nodes": [], "edges": []},
+        "evidence": [],
+        "is_sufficient": False,
+        "retry_count": 2,
+        "answer": {"answer": "근거를 찾지 못했습니다.", "intent": "EXPLANATION"},
+    }
+
+    with patch("app.ai.rag.pipeline.build_graph") as build_graph:
+        build_graph.return_value.invoke.return_value = state
+        result = run_qa_pipeline_state(
+            question="코드는 어디에 있어?",
+            github_repository_id=1,
+        )
+
+    assert result is state
+    build_graph.return_value.invoke.assert_called_once()
+
+
 def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
     call_order = []
     vector_attempt = 0
@@ -120,9 +144,7 @@ def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
 
     def graph(state):
         call_order.append(f"graph:{vector_attempt}")
-        assert state["vector_results"] == [
-            {"graph_node_id": f"version:{vector_attempt}"}
-        ]
+        assert state["vector_results"] == [{"graph_node_id": f"version:{vector_attempt}"}]
         return {"graph_results": {"nodes": [], "edges": []}}
 
     def select(state):
