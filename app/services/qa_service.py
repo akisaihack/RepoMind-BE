@@ -1,33 +1,94 @@
-"""app/api/v1/chat.py가 호출할 질의응답 오케스트레이션 서비스.
+"""Session-scoped orchestration service for repository Q&A."""
 
-app/services/code_graph_import.py와 같은 패턴: 요청을 받아서 -> 필요한
-컨텍스트를 채우고 -> LangGraph 파이프라인을 실행하고 -> API 응답 DTO로
-변환해서 반환.
+from collections.abc import Callable
+from dataclasses import dataclass
+from uuid import UUID
 
-아직 구현 전 — docs/langgraph_pipeline.md 4.11, 6번(미해결 이슈 1번:
-세션↔레포 매핑) 참고.
-"""
-
-from app.ai.rag.pipeline import run_qa_pipeline
+from app.adapters.qa_response_adapter import QAResponseAdapter
+from app.ai.rag.pipeline import run_qa_pipeline_state
+from app.ai.rag.state import QAState
 from app.dtos.chat import ChatRequest, ChatResponseData
+from app.models.repository import RepositoryAnalysisStatus
+from app.repositories.chat_session import ChatSessionStore
+
+
+class QASessionNotFoundError(Exception):
+    """Raised when Q&A is requested for a chat session that does not exist."""
+
+
+class QARepositoryNotReadyError(Exception):
+    """Raised when the session's repository analysis has not completed."""
+
+
+class QAGitHubRepositoryIdMissingError(Exception):
+    """Raised when an analysis-ready repository has no GitHub repository identifier."""
+
+
+@dataclass(frozen=True)
+class QAExecutionContext:
+    """The repository identity required to run a session-scoped Q&A request."""
+
+    session_id: UUID
+    repository_id: UUID
+    github_repository_id: int
 
 
 class QAService:
-    def __init__(self) -> None:
-        # TODO: 세션 저장소(현재 app.repositories.memory_store, 추후 실제
-        # DB)를 주입받아서 session_id -> github_repository_id를 조회할 수
-        # 있어야 함. 지금은 세션↔레포 연결 자체가 미해결 상태.
-        pass
+    def __init__(
+        self,
+        chat_session_store: ChatSessionStore,
+        *,
+        pipeline_runner: Callable[..., QAState] = run_qa_pipeline_state,
+        response_adapter: QAResponseAdapter | None = None,
+    ) -> None:
+        self._chat_session_store = chat_session_store
+        self._pipeline_runner = pipeline_runner
+        self._response_adapter = response_adapter or QAResponseAdapter()
 
-    def ask(self, session_id: str, request: ChatRequest) -> ChatResponseData:
-        """질문을 받아 파이프라인을 실행하고 ChatResponseData를 반환.
+    def get_execution_context(self, session_id: UUID) -> QAExecutionContext:
+        """Resolve and validate the repository identity for a chat session.
 
-        app/api/v1/chat.py의
-        `# TODO: 실제 RAG 파이프라인 연동 시 아래 목(Mock) 데이터를 삭제하고
-        실제 생성 로직으로 교체` 자리에서 이 메서드를 호출하도록 교체하면 됨
-        (get_mock_chat_response() 대신 이 메서드 호출).
+        This is deliberately separate from ``ask`` so the API can map lookup
+        failures consistently before the RAG pipeline is connected.
         """
-        raise NotImplementedError("아직 구현 전 — docs/langgraph_pipeline.md 4.11 참고")
+        chat_session = self._chat_session_store.get_with_repository(session_id)
+
+        if chat_session is None:
+            raise QASessionNotFoundError("Chat session not found.")
+
+        repository = chat_session.repository
+        if repository.analysis_status != RepositoryAnalysisStatus.READY.value:
+            raise QARepositoryNotReadyError(
+                "Repository analysis must be ready before asking questions."
+            )
+        if repository.github_repository_id is None:
+            raise QAGitHubRepositoryIdMissingError(
+                "Repository analysis did not produce a GitHub repository ID."
+            )
+
+        return QAExecutionContext(
+            session_id=chat_session.id,
+            repository_id=repository.id,
+            github_repository_id=repository.github_repository_id,
+        )
+
+    def ask(self, session_id: UUID, request: ChatRequest) -> ChatResponseData:
+        """Classify, retrieve, and adapt one question for an existing chat session."""
+        context = self.get_execution_context(session_id)
+        final_state = self._pipeline_runner(
+            question=request.question,
+            github_repository_id=context.github_repository_id,
+            conversation_id=str(context.session_id),
+            question_kind=request.question_kind,
+        )
+        return self._response_adapter.adapt(final_state, final_state["answer"])
 
 
-__all__ = ["QAService", "run_qa_pipeline"]
+__all__ = [
+    "QAExecutionContext",
+    "QAGitHubRepositoryIdMissingError",
+    "QARepositoryNotReadyError",
+    "QASessionNotFoundError",
+    "QAService",
+    "run_qa_pipeline_state",
+]

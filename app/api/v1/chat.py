@@ -1,8 +1,10 @@
+"""Chat query API backed by the repository Q&A service."""
+
 from dataclasses import asdict
 from http import HTTPStatus
 from uuid import UUID
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from app.dtos.chat import ChatRequest
 from app.dtos.question import QuestionKind
@@ -13,13 +15,23 @@ from app.repositories.chat_message import (
     ChatMessageSessionNotFoundError,
     ChatMessageStore,
 )
-from app.sample.mock_chat import get_mock_chat_response
+from app.repositories.chat_session import ChatSessionPersistenceError, ChatSessionStore
+from app.services.qa_service import (
+    QAGitHubRepositoryIdMissingError,
+    QARepositoryNotReadyError,
+    QAService,
+    QASessionNotFoundError,
+)
 
 chat_bp = Blueprint("chat", __name__)
 
 
 def _get_chat_message_store() -> ChatMessageStore:
     return ChatMessageStore(db.session)
+
+
+def _get_qa_service() -> QAService:
+    return QAService(ChatSessionStore(db.session))
 
 
 def _parse_session_id(value: str) -> UUID:
@@ -38,21 +50,10 @@ def _parse_question(value: object) -> str:
         raise APIError("INVALID_QUESTION", "question must not be empty.")
     return question
 
+
 @chat_bp.post("/sessions/<session_id>/chat")
 def chat(session_id: str):
-    """
-    특정 세션에 대한 질의응답(Chat) 쿼리를 처리.
-    
-    <pre>
-        JSON 페이로드로 'question'과 선택적인 'question_kind'를 전달받아
-        RAG 파이프라인을 통해 답변, 근거, 그래프 데이터를 포함한 결과를 반환.
-        (현재는 프론트엔드 연동을 위한 Mock 데이터를 반환 중)
-    </pre>
-    
-    @param session_id 대화가 진행 중인 세션의 고유 ID
-    @return JSON 형태의 질의응답 결과 (ChatResponseData)
-    @throws KeyError 필수 JSON 필드가 누락된 경우 (추후 적용 예정)
-    """
+    """Answer one question using the session's analyzed repository context."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         raise APIError("INVALID_REQUEST", "A JSON object is required.")
@@ -67,21 +68,51 @@ def chat(session_id: str):
             f"question_kind must be one of: {', '.join(QuestionKind)}.",
         ) from exc
 
-    _request_dto = ChatRequest(
+    request_dto = ChatRequest(
         question=_parse_question(data.get("question")),
         question_kind=question_kind,
     )
-    
-    # -------------------------------------------------------------------------
-    # TODO: 실제 RAG 파이프라인 연동 시 아래 목(Mock) 데이터를 삭제하고 실제 생성 로직으로 교체.
-    # -------------------------------------------------------------------------
-    response_data = get_mock_chat_response()
-    serialized_response = asdict(response_data)
+    try:
+        response_data = _get_qa_service().ask(parsed_session_id, request_dto)
+    except QASessionNotFoundError as exc:
+        raise APIError(
+            "SESSION_NOT_FOUND",
+            "The requested chat session does not exist.",
+            status=HTTPStatus.NOT_FOUND,
+        ) from exc
+    except QARepositoryNotReadyError as exc:
+        raise APIError(
+            "REPOSITORY_NOT_READY",
+            "Repository analysis must be ready before asking questions.",
+            status=HTTPStatus.CONFLICT,
+        ) from exc
+    except QAGitHubRepositoryIdMissingError as exc:
+        raise APIError(
+            "REPOSITORY_NOT_ANALYZED",
+            "Repository analysis metadata is incomplete.",
+            status=HTTPStatus.CONFLICT,
+        ) from exc
+    except ChatSessionPersistenceError as exc:
+        raise APIError(
+            "SESSION_RETRIEVAL_FAILED",
+            "Chat session details could not be loaded.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+    except APIError:
+        raise
+    except Exception as exc:
+        current_app.logger.exception("Q&A pipeline failed", exc_info=exc)
+        raise APIError(
+            "QA_PIPELINE_FAILED",
+            "The question could not be answered at this time.",
+            status=HTTPStatus.BAD_GATEWAY,
+        ) from exc
 
+    serialized_response = asdict(response_data)
     try:
         _get_chat_message_store().create_exchange(
             session_id=parsed_session_id,
-            question=_request_dto.question,
+            question=request_dto.question,
             answer=response_data.summary,
             structured_answer=serialized_response,
         )
@@ -97,8 +128,5 @@ def chat(session_id: str):
             "Chat messages could not be saved.",
             status=HTTPStatus.SERVICE_UNAVAILABLE,
         ) from exc
-    
-    return jsonify({
-        "success": True,
-        "data": serialized_response
-    }), 200
+
+    return jsonify({"success": True, "data": serialized_response}), HTTPStatus.OK

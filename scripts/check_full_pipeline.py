@@ -1,10 +1,11 @@
 """전체 파이프라인(8개 노드)을 run_qa_pipeline()으로 실제 실행해서
-결과를 파일로 남기는 테스트 스크립트.
+결과를 파일로 남기는 점검 스크립트.
 
 scripts/check_my_part.py와의 차이: 그건 question_analyzer/response_composer를
 빼고 5개 노드만 손으로 이어붙인 스크립트임(그 두 노드가 구현되기 전에 쓰던 것).
 이제 8개 노드가 다 구현됐으니, 이 스크립트는 run_qa_pipeline()을 그대로 호출해서
-"실제로 프론트가 호출하는 것과 동일한 경로"를 검증함.
+검색·분류·답변 생성 경로를 점검함. 세션 조회·메시지 영속화까지 포함한 API E2E는
+README의 "실제 RAG Chat E2E 검증" 절차를 사용함.
 
 중요: run_qa_pipeline()의 반환값은 QueryResponseState 호환 dict
 {"answer": str, "intent": str, "visualization": dict | None} 뿐임.

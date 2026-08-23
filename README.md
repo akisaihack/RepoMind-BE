@@ -51,6 +51,18 @@ curl http://127.0.0.1:8000/api/v1/health/db
 DB에 연결할 수 없으면 API key나 DB 접속 문자열을 노출하지 않고 HTTP `503`과
 `DATABASE_UNAVAILABLE` 오류를 반환합니다.
 
+RAG Chat을 실행하기 전에는 다음 readiness API를 호출합니다. 이 API는 Azure OpenAI의
+실제 모델 호출을 만들지 않으며, Azure chat/embedding 설정의 완전성, PostgreSQL·pgvector,
+Neo4j 연결만 검사합니다.
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health/readiness
+```
+
+성공 시 `ready`와 각 의존성 상태를 반환합니다. 설정이 누락되면 `503`
+`RAG_CONFIGURATION_INCOMPLETE`와 누락된 환경 변수 이름만 반환하며, 키·비밀번호는 응답이나
+로그에 포함하지 않습니다.
+
 `.env`의 `APP_ENV`는 `development`, `testing`, `production` 중 하나를 사용합니다. 로컬
 PostgreSQL에 연결하려면 PostgreSQL 드라이버를 포함해 설치합니다.
 
@@ -201,7 +213,7 @@ docker compose exec postgres sh -c \
   "SELECT commit_sha, file_path, patch_status FROM commit_file_changes LIMIT 20;"'
 ```
 
-## Azure OpenAI 임베딩
+## Azure OpenAI
 
 회사에서 제공한 Azure OpenAI 리소스 정보를 `.env`에 설정합니다. 실제 값과 API key는 커밋하거나
 로그에 출력하지 않습니다.
@@ -210,7 +222,13 @@ docker compose exec postgres sh -c \
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-api-key
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT=shared-embedding
+AZURE_OPENAI_DEPLOYMENT=shared-chat
+# 선택 사항: 질문 유형 분류용 경량 모델. 없으면 shared-chat을 사용합니다.
+AZURE_OPENAI_NANO_DEPLOYMENT=shared-chat-nano
 ```
+
+`AZURE_OPENAI_DEPLOYMENT`는 답변 생성에 필수입니다. `AZURE_OPENAI_NANO_DEPLOYMENT`는
+질문 유형 분류에 우선 사용되며, 설정하지 않으면 일반 chat deployment를 사용합니다.
 
 테스트 API는 전체 벡터를 노출하지 않고 차원과 처음 세 값만 반환합니다.
 
@@ -231,6 +249,54 @@ Azure 호출 없이 mock 테스트만 실행하려면 다음 명령을 사용합
 
 ```bash
 pytest tests/test_embedding_service.py tests/test_embeddings_api.py
+```
+
+## 실제 RAG Chat E2E 검증
+
+실행 전에 `.env`의 GitHub·Azure OpenAI 값과 `AZURE_OPENAI_DEPLOYMENT`를 실제 값으로 설정합니다.
+분석 대상은 Java 코드가 포함된 공개 GitHub 레포지토리를 권장합니다.
+
+1. 인프라와 스키마를 준비합니다.
+
+   ```bash
+   docker compose up -d
+   flask --app wsgi db upgrade
+   python scripts/init_neo4j_schema.py
+   flask --app wsgi run --debug
+   ```
+
+2. 다른 터미널에서 readiness를 확인합니다. `ready`가 아니면 오류 코드와 누락 설정을 먼저
+   해결합니다.
+
+   ```bash
+   curl http://127.0.0.1:8000/api/v1/health/readiness
+   ```
+
+3. 프런트엔드를 실제 API 모드로 실행합니다.
+
+   ```dotenv
+   VITE_USE_MOCK=false
+   VITE_API_BASE_URL=http://localhost:8000/api/v1
+   ```
+
+4. UI에서 레포지토리를 등록하고 분석 상태가 `ready`가 될 때까지 기다린 뒤, 새 대화에서
+   질문을 입력합니다. 이후 페이지를 새로고침하고 후속 질문을 보내 다음을 확인합니다.
+
+   - 질문 유형을 지정하지 않아도 자동 분류되어 답변이 생성된다.
+   - user/assistant 메시지와 구조화된 답변이 대화 이력에 저장된다.
+   - 새로고침 뒤에도 답변의 근거·그래프·신뢰도 정보가 복원된다.
+
+파이프라인 자체를 CLI에서 반복 확인하려면 분석된 GitHub repository ID로 아래 명령을 실행합니다.
+
+```bash
+python scripts/check_full_pipeline.py --github-repository-id 123456789
+```
+
+분류 모델 호출을 제외하고 검색·응답 경로만 확인하려면 `--skip-classifier`를 추가합니다.
+실제 PostgreSQL·Neo4j readiness 통합 테스트는 다음처럼 opt-in으로 실행합니다.
+
+```bash
+RUN_INTEGRATION_TESTS=1 pytest tests/integration/test_rag_readiness.py
 ```
 
 ## 개발 명령어

@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.chat_message import ChatMessage
 from app.models.chat_session import ChatSession
@@ -45,6 +45,20 @@ class ChatSessionStore:
             return self._session.get(ChatSession, session_id)
         except SQLAlchemyError as exc:
             raise ChatSessionPersistenceError("Failed to retrieve chat session.") from exc
+
+    def get_with_repository(self, session_id: UUID) -> ChatSession | None:
+        """Return a chat session together with its registered repository."""
+        statement = (
+            select(ChatSession)
+            .options(joinedload(ChatSession.repository))
+            .where(ChatSession.id == session_id)
+        )
+        try:
+            return self._session.scalar(statement)
+        except SQLAlchemyError as exc:
+            raise ChatSessionPersistenceError(
+                "Failed to retrieve chat session with repository."
+            ) from exc
 
     def list_by_repository(self, repository_id: UUID) -> list[ChatSession]:
         statement = (

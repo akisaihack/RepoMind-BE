@@ -40,6 +40,24 @@ def test_creates_and_retrieves_chat_session(app) -> None:
         assert store.get(uuid4()) is None
 
 
+def test_retrieves_chat_session_with_its_repository(app) -> None:
+    with app.app_context():
+        repository = _repository(suffix="context")
+        repository.github_repository_id = 123
+        db.session.add(repository)
+        db.session.commit()
+        store = ChatSessionStore(db.session)
+        created = store.create(repository_id=repository.id, title="QA 컨텍스트")
+
+        db.session.expire_all()
+        resolved = store.get_with_repository(created.id)
+
+        assert resolved is not None
+        assert resolved.repository.id == repository.id
+        assert resolved.repository.github_repository_id == 123
+        assert store.get_with_repository(uuid4()) is None
+
+
 def test_lists_only_sessions_for_requested_repository_in_recent_activity_order(app) -> None:
     with app.app_context():
         first_repository = _repository(suffix="first")
