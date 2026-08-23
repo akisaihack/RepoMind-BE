@@ -60,6 +60,42 @@ class ChatMessageStore:
 
         return message
 
+    def create_exchange(
+        self,
+        *,
+        session_id: UUID,
+        question: str,
+        answer: str,
+        structured_answer: dict[str, Any],
+    ) -> tuple[ChatMessage, ChatMessage]:
+        """Persist one user question and its assistant answer atomically."""
+
+        chat_session = self._get_session(session_id)
+        if chat_session is None:
+            raise ChatMessageSessionNotFoundError("Chat session not found.")
+
+        user_message = ChatMessage(
+            session_id=session_id,
+            role=ChatMessageRole.USER.value,
+            content=question,
+        )
+        assistant_message = ChatMessage(
+            session_id=session_id,
+            role=ChatMessageRole.ASSISTANT.value,
+            content=answer,
+            structured_answer=structured_answer,
+        )
+        chat_session.updated_at = datetime.now(UTC)
+        self._session.add_all([user_message, assistant_message])
+
+        try:
+            self._session.commit()
+        except SQLAlchemyError as exc:
+            self._session.rollback()
+            raise ChatMessagePersistenceError("Failed to create chat exchange.") from exc
+
+        return user_message, assistant_message
+
     def get(self, message_id: UUID) -> ChatMessage | None:
         try:
             return self._session.get(ChatMessage, message_id)

@@ -183,6 +183,31 @@ def get_session_messages(session_id: str):
     return success_response(asdict(response_data))
 
 
+@sessions_bp.delete("/<session_id>")
+def delete_session(session_id: str):
+    """Delete one chat session and all of its persisted messages."""
+
+    parsed_session_id = _parse_session_id(session_id)
+
+    try:
+        deleted = _get_chat_session_store().delete(parsed_session_id)
+    except ChatSessionPersistenceError as exc:
+        raise APIError(
+            "SESSION_DELETION_FAILED",
+            "Chat session could not be deleted.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    if not deleted:
+        raise APIError(
+            "SESSION_NOT_FOUND",
+            "The requested chat session does not exist.",
+            status=HTTPStatus.NOT_FOUND,
+        )
+
+    return success_response({"session_id": str(parsed_session_id)})
+
+
 @sessions_bp.get("/")
 def list_sessions():
     """Return persisted chat sessions belonging to one repository."""

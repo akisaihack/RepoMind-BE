@@ -2,10 +2,11 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.models.chat_message import ChatMessage
 from app.models.chat_session import ChatSession
 
 
@@ -76,6 +77,7 @@ class ChatSessionStore:
             return False
 
         try:
+            self._session.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
             self._session.delete(chat_session)
             self._session.commit()
         except SQLAlchemyError as exc:
