@@ -275,6 +275,47 @@ def test_returns_not_found_for_unknown_session_history(client) -> None:
     _assert_error(response, status_code=404, code="SESSION_NOT_FOUND")
 
 
+def test_delete_session_removes_its_messages_and_session_list_item(client, app) -> None:
+    repository_id = _persist_repository(app, status=RepositoryAnalysisStatus.READY)
+    session_id = _persist_chat_session(
+        app,
+        repository_id=repository_id,
+        title="삭제할 대화",
+        updated_at=datetime.now(UTC),
+    )
+    _persist_message(
+        app,
+        session_id=session_id,
+        role=ChatMessageRole.USER,
+        content="삭제 전 메시지",
+        created_at=datetime.now(UTC),
+    )
+
+    response = client.delete(f"/api/v1/sessions/{session_id}")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "success": True,
+        "data": {"session_id": str(session_id)},
+    }
+    _assert_error(
+        client.get(f"/api/v1/sessions/{session_id}/messages"),
+        status_code=404,
+        code="SESSION_NOT_FOUND",
+    )
+    assert client.get(f"/api/v1/sessions/?repo_id={repository_id}").get_json()["data"] == {
+        "sessions": []
+    }
+    with app.app_context():
+        assert db.session.query(ChatMessage).count() == 0
+
+
+def test_delete_session_returns_not_found_for_unknown_session(client) -> None:
+    response = client.delete(f"/api/v1/sessions/{uuid4()}")
+
+    _assert_error(response, status_code=404, code="SESSION_NOT_FOUND")
+
+
 @pytest.mark.parametrize(
     ("url", "code"),
     [
@@ -287,6 +328,12 @@ def test_rejects_invalid_session_lookup_identifiers(client, url: str, code: str)
     response = client.get(url)
 
     _assert_error(response, status_code=400, code=code)
+
+
+def test_rejects_invalid_session_id_when_deleting(client) -> None:
+    response = client.delete("/api/v1/sessions/not-a-uuid")
+
+    _assert_error(response, status_code=400, code="INVALID_SESSION_ID")
 
 
 def test_converts_repository_retrieval_failure_to_service_unavailable(client, monkeypatch) -> None:
