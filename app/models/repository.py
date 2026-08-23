@@ -2,12 +2,16 @@
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import BigInteger, CheckConstraint, String, Text, UniqueConstraint, Uuid
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
+
+if TYPE_CHECKING:
+    from app.models.chat_session import ChatSession
 
 
 class RepositoryAnalysisStatus(StrEnum):
@@ -58,4 +62,10 @@ class Repository(db.Model):
         nullable=False,
         default=_utcnow,
         onupdate=_utcnow,
+    )
+
+    chat_sessions: Mapped[list["ChatSession"]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
