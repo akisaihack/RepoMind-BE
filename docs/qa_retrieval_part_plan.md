@@ -291,12 +291,200 @@ python scripts/check_my_part.py --github-repository-id <REPO_ID> --question "이
 알려주면 같이 원인 봐줄게 — 인프라 문제(연결 안 됨)인지, 데이터가 아예
 안 들어갔는지, 로직 버그인지 구분이 필요해서.
 
+### 2-1단계 — (신규, 2026-08-22) 재검색 루프가 실제로 끝까지 도는지 확인
+
+`evidence_validator.py`(내가 짠 부분)는 "근거 부족 여부 판단 + retry_count
+증가"까지만 함. "부족하면 실제로 vector_retriever로 되돌아가서 다시
+검색"하는 라우팅 자체는 `pipeline.py`(원래 있던 배관 코드)의
+`_route_after_validation()` + `add_conditional_edges()` 담당.
+
+근데 `pipeline.py` 자체 docstring에 **아직 검증 안 된 위험**이 메모돼 있음:
+재시도 시 `vector_retriever`로만 돌아가고 `graph_retriever`는 다시 안
+도는데, `evidence_fusion`은 이 둘 다 끝나야 합류(join)하는 구조라서,
+재시도했을 때 `evidence_fusion`이 정상적으로 다시 도는지가 미확인 상태.
+
+확인 방법: `scripts/check_pipeline_skeleton.py`로 "근거 부족 -> 재시도
+-> 그래도 부족 -> retry_count 소진 -> response_composer까지 도달" 시나리오를
+끝까지 돌려보기(7개 노드 monkeypatch 더미로 돌리는 스크립트라 실 데이터
+없이도 확인 가능 — 다만 지금은 이 시나리오 자체를 아직 안 돌려봄).
+문제 있으면(예: graph_results가 재시도 후 stale하게 남아있거나 fusion이
+재실행 안 되면) retry 분기 대상을 `vector_retriever`/`graph_retriever`
+둘 다로 바꿔야 함 — 이건 `pipeline.py` 수정이라 내 파트 범위를 살짝
+넘을 수 있어서, 필요해지면 팀과 먼저 상의.
+
+- [ ] `check_pipeline_skeleton.py`로 재시도 루프 끝까지 도는지 확인
+
 ### 3단계 — 남은 것
 
 - 위 테스트 다 정상이면 Step 1~6은 실 데이터 기준으로도 완료로 확정
 - Step 7(`question_analyzer.py`)만 남음 — 이건 별도로 진행(팀원과
   `ChatCompletionService` 먼저 조율)
 - `scripts/link_changed_by.py`는 계속 보류(0-2 참고, 지금은 불필요)
+
+---
+
+## 0-4. 두 번째 rebase 이후 재확인 (2026-08-23 — `question_kind` enum 전환 + `target_selector` 신규 노드)
+
+팀원이 `question_kind`를 string에서 `QuestionKind`(StrEnum, `app/dtos/question.py`
+신규)로 정리하면서 rebase함. 확인 결과:
+
+- **enum 전환 자체는 이미 내 파일들에 자동으로 잘 반영됨** —
+  `state.py`/`graph_retriever.py`/`vector_retriever.py` 전부 `QuestionKind`
+  기준으로 잘 맞춰져 있음. `StrEnum`이라 기존 문자열 키("flow" 등) 비교와
+  호환돼서 추가로 고칠 것 없음.
+- **신규 노드 `target_selector` 삽입됨** (`vector_retriever` -> `target_selector`
+  -> `graph_retriever` 순서로 파이프라인 변경, `pipeline.py` 확인함): 벡터
+  검색 후보 중 LLM으로 제일 적합한 것 하나를 골라 `state["selected_target"]`에
+  담아줌(`app/dtos/target_selection.py`의 `SelectedTarget`). 이 DTO가
+  `graph_node_id`/`method_node_id`를 그대로 갖고 있어서 내 `graph_retriever.py`
+  수정(0-2 참고)이 자연스럽게 호환됨 — `selected_target`이 없으면
+  `vector_results[0]`로 폴백하는 방어 코드도 이미 들어가 있음. **손볼 것 없음.**
+- **response_composer.py 구현 완료됨**(팀원 파트) — `app/adapters/response_input_adapter.py`,
+  `app/ai/answer_generator.py`, `app/services/response_service.py`,
+  `app/visualization/*` 등 새 파일들로 구성됨.
+- **⚠️ 팀 확인 필요 (정정된 버전)**: 처음엔 "근거가 답변에 아예 안 쓰인다"로
+  이해했는데, 다시 확인해보니 그건 아님 — `answer_generator.py`가 실제로
+  `code_context`/`graph_context`/`history_context`를 LLM 프롬프트에 다 넣고,
+  intent 질문엔 "Issue/PR/Commit 관계 중심으로 설명하라"는 전용 지침까지
+  있어서 깃 이력 근거도 답변 문장에 실제로 반영됨. 진짜 확인할 포인트는 두
+  가지:
+  1. `state["evidence"]`(내 `evidence_fusion.py`가 만드는, 중복 제거되고
+     정리된 근거 리스트)는 `evidence_validator`의 재검색 판단에만 쓰이고,
+     `response_composer`는 이걸 안 쓰고 `vector_results`/`graph_results`
+     원본을 자기가 따로 한 번 더 가공해서 씀 — 중복 작업 아닌지 확인 필요.
+  2. 최종 응답 DTO가 원래 계획(`app/dtos/chat.py`의 `ChatResponseData` —
+     summary/claims/evidence/confidence/graph, 프론트가 근거를 별도
+     목록/카드로 보여줄 수 있는 구조)보다 단순한 형태
+     (`app/dtos/response_generation.py`의 `QueryResponse` — answer/intent/visualization,
+     근거는 LLM 답변 문장 속에만 녹아있고 별도 목록으로 프론트에 안 보여줌)로
+     바뀜 — 의도된 축소인지, 프론트에 근거를 별도로 보여줄 계획이 있는지
+     확인 필요.
+  **혼자 판단해서 고치지 말고 팀에 먼저 물어볼 것(내일 회의 예정).**
+- `config.py`에 `AZURE_OPENAI_DEPLOYMENT`/`AZURE_OPENAI_NANO_DEPLOYMENT`도
+  이미 추가돼 있음 — Step 7 사전 준비 항목 하나 저절로 해결됨.
+- `scripts/check_my_part.py`는 아직 `target_selector`를 안 거치고 바로
+  `graph_retriever`를 호출하는 예전 체인 그대로임 — 방어 코드 덕분에 안
+  깨지긴 하지만(폴백), 정확도 테스트하려면 `target_selector` 단계도 껴서
+  업데이트하는 게 좋음(다음 실 데이터 테스트 때 같이 손볼 것).
+
+---
+
+## 0-5. 실 데이터 테스트 중 확인 사항 + 회의 안건 확정 (2026-08-23)
+
+**인프라 연결 확인 완료:**
+- Postgres/pgvector: `flask --app wsgi db upgrade` 정상 동작 확인. `code_chunks.embedding`
+  컬럼이 `NOT NULL`이라 행이 존재한다는 것 자체가 임베딩까지 채워져 저장됐다는
+  뜻 — **pgvector 정상 동작 확인.**
+- Neo4j: SSH 터널(`ssh -N -L 7687:127.0.0.1:7687 aihack02@10.250.250.5`)을 통해
+  `bolt://127.0.0.1:7687`로 접속 성공, Neo4j Browser에서 직접 데이터 확인함.
+
+**Postgres/Neo4j 대상 프로젝트 일치 여부 — 확인 결과 문제 없음:**
+- 처음엔 Postgres(`code_chunks`)와 Neo4j(`Commit` 이력)가 서로 다른 프로젝트를
+  가리키는 것처럼 보여서 팀 확인 필요 이슈로 분류했었음.
+- 확인해보니 이 프로젝트(RepoMind)의 분석 대상은 애초에 RepoMind-BE 자기
+  자신이 아니라 **지정된 외부 GitHub 프로젝트**이고, Postgres/Neo4j 둘 다 그
+  동일한 외부 프로젝트 기준인 게 맞음 (2026-08-23 확인). **팀 확인 필요
+  목록에서 제외.**
+
+**회의 안건 확정 — Step 7 방식은 LangChain으로 결정 (2026-08-23):**
+- 원래 계획(`app/services/chat_completion.py`에 Azure OpenAI SDK를 직접
+  호출하는 `ChatCompletionService` 신규 작성)을, 팀원의 `response_composer.py`가
+  이미 쓰고 있는 LangChain 패턴(`ChatPromptTemplate | AzureChatOpenAI |
+  StrOutputParser`, `app/ai/answer_generator.py` 참고)으로 통일하기로 확정함.
+  아래 "Step 7" 섹션도 이에 맞춰 갱신함 — **더 이상 팀 확인 필요 항목 아님.**
+
+**남은 회의 안건 (3개, 0-4 참고):**
+1. intent 질문에 `CHANGE_HISTORY` 시각화가 자동으로 붙는 게 의도된 것인지
+2. `evidence_fusion.py` 결과가 `response_composer`에서 안 쓰이고 중복 로직이
+   있는 것 — 정리할지
+3. 최종 응답 DTO(`QueryResponse`)에 구조화된 근거 목록이 빠진 것 — 프론트에
+   별도로 보여줄 계획이 있는지
+
+---
+
+## 0-6. 실 데이터 적재 완료 + 등록 파이프라인 정리 (2026-08-23)
+
+**중요 발견 — 수동 import 스크립트 대신 쓸 수 있는 자동 파이프라인이 이미 있었음:**
+
+`POST /api/v1/repositories/`(프론트 "등록하기" 버튼)를 호출하면, 백엔드가
+Postgres에 `repositories` row를 만든 직후 **백그라운드 스레드로
+`AnalysisPipelineService`를 자동 실행**함 (`app/jobs/dispatcher.py` →
+`app/factories/pipeline.py` → `app/services/analysis_pipeline.py`). 이 안에서
+GitHub 이력 import → git clone → 코드 그래프 import(Neo4j) → 코드 청크+임베딩
+import(Postgres)가 **같은 커밋 기준으로 순서대로 자동 실행**됨. 즉
+`import_chunks.py`/`import_code_graph.py`/`import_github_history.py`를 손으로
+따로 돌릴 필요 없이, **리포지토리 등록(또는 이미 등록된 리포의 "재분석"
+버튼) 하나로 다 됨.** 앞으로 실 데이터 테스트는 이 경로를 우선 사용할 것
+(0-3 가이드의 수동 스크립트 방식은 이 자동 경로가 안 될 때의 대안으로 격하).
+
+**겪은 문제들 (다음에 같은 문제 겪으면 참고):**
+- Postgres 연결 시 `search_path`가 실제 데이터가 있는 `team2` 스키마를 안
+  보고 있어서 `relation "repositories" does not exist` 에러 발생 →
+  `DATABASE_URL`에 `&options=-csearch_path%3Dteam2` 추가해서 해결.
+- 등록 시도 도중 이미 같은 URL+브랜치로 등록된 (다른 시점에 수동 스크립트로만
+  일부 채워졌던, 즉 Postgres 청크는 있는데 Neo4j 그래프는 비어있던) row가
+  있어서 `DuplicateRepositoryError`(409) 발생 → 삭제 대신 그 리포 카드의
+  **"재분석" 버튼**으로 파이프라인 재실행해서 해결 (재분석은 `ready`/`failed`
+  상태에서 다시 실행 가능하게 되어 있음).
+- 백엔드 로깅 레벨이 따로 설정 안 되어 있어서(`logging.basicConfig` 없음)
+  파이프라인 진행 로그(`logger.info`)가 콘솔에 안 찍힘 — 에러(`logger.exception`)만
+  찍힘. 정상 동작 중에도 콘솔이 조용한 게 맞으니, 진행 확인은 로그가 아니라
+  `GET /api/v1/repositories/`의 `analysis_status`/`latest_analyzed_sha` 값으로
+  할 것.
+
+**결과: 재분석 실행 후 실 데이터(Postgres 청크 + Neo4j 그래프 + GitHub 이력)
+전부 정상 적재 확인함 (2026-08-23).** 이제 `check_my_part.py` 등으로 질문별
+동작 테스트 가능.
+
+---
+
+## 0-7. Step 7 구현 완료 + 전체 파이프라인(`run_qa_pipeline`) 실 데이터 테스트 (2026-08-23)
+
+**Step 7(`question_analyzer.py`) 구현 완료:** `app/ai/question_classifier.py`
+신규 작성, `target_selector.py`와 동일한 LangChain `with_structured_output` 패턴
+(`QuestionClassificationDecision` DTO, `app/dtos/question.py`). LLM 실패 시
+`QuestionKind.LOCATION`으로 방어적 폴백.
+
+**전체 8노드 파이프라인 실 데이터 테스트 (`scripts/check_full_pipeline.py`,
+`run_qa_pipeline()` 직접 호출, 질문 5개: flow×2/impact/location/intent):**
+5건 모두 에러 없이 끝까지 실행됨, `question_kind` 분류 정확, 답변 내용에
+환각(존재하지 않는 클래스/메서드 지어내기) 없음. impact/intent처럼 근거가
+부족한 부분은 "확인할 수 없다"고 정직하게 인정하는 것까지 확인함 (근거 없이
+지어내지 않음). **내 파트(Step 1~7: question_analyzer ~ evidence_validator)는
+기능적으로 완료 및 검증된 것으로 판단.**
+
+테스트 중 발견한 사항 2가지 (내 코드 문제 아님, 팀 확인용):
+- **(0-5 안건 #1 구체화)** `impact`/`intent` 질문에서 콘솔에
+  `Unsupported visualization type: DEPENDENCY` / `CHANGE_HISTORY` 경고가 찍힘.
+  원인 확인함 — `app/visualization/visualization_builder.py`의
+  `VisualizationBuilder._builders`에 `VisualizationType.CALL_FLOW`용
+  `CallFlowBuilder`만 등록돼 있고 `DEPENDENCY`/`CHANGE_HISTORY` 타입 빌더는
+  아직 없음. `answer` 텍스트 자체는 정상 생성되고 `visualization`만 `None`으로
+  빠짐 — 답변 품질에 영향 없음, 그래프 시각화 기능만 미완성. 회의 때 누가
+  만들지(또는 CALL_FLOW로만 한정할지) 확정 필요.
+- **(신규)** `intent` 질문 테스트 중 Neo4j에서
+  `relationship type does not exist: DELETED_IN` 경고(warning, 에러 아님) 발생.
+  `changed_by_history` 쿼리(`app/graph/queries/traversal.py`, 그래프 담당자
+  파트)가 `(start:Method)-[:DELETED_IN]->(:Commit)`을 OPTIONAL MATCH하는데,
+  현재 Neo4j 인스턴스엔 `DELETED_IN` 관계가 한 건도 없음(단일 커밋만 import돼서
+  삭제 이력 자체가 없을 가능성 높음 — 아직 급한 문제는 아님, 결과에는 영향
+  없었음). 그래프 스키마 담당자에게 "의도대로 아직 안 쓰인 것"인지만 확인
+  필요.
+
+**핸드오프(Step 5→response_composer) 코드 레벨로 재확인 (0-5 안건 #2 구체화):**
+`app/adapters/response_input_adapter.py`의 `adapt_qa_state()`를 직접 읽어서
+확인함 — `state["question"]`/`question_kind`(→intent, visualization_type)/
+`selected_target`(→target)/`vector_results`/`graph_results`는 다
+`ResponseGenerationInput`으로 정상 매핑됨. **근데 `state["evidence"]`(내
+Step 5 `evidence_fusion.py`가 만드는, 벡터+그래프 결과를 중복제거해서 합친
+결과물)는 adapter가 아예 안 읽음** — adapter가 `vector_results`/
+`graph_results`를 evidence를 거치지 않고 직접 다시 변환해서 씀. 즉
+`evidence_fusion.py`는 지금 파이프라인에서 output이 어디에도 안 쓰이는
+상태(evidence_validator의 `is_sufficient`/`retry_count`만 pipeline.py 라우팅에
+쓰이고, evidence 리스트 자체는 죽은 값). 답변 품질엔 문제 없었지만(어차피
+adapter가 같은 원본 데이터를 다시 정리해서 씀), 중복 로직 + dedup 미적용
+가능성이 실재함 — 내일 회의에서 "evidence_fusion 없애고 adapter로 통합"할지
+"adapter가 evidence를 쓰게 고칠지" 결정 필요.
 
 ---
 
@@ -570,32 +758,40 @@ def validate_evidence_sufficiency(state: QAState) -> dict:
   Step 2에서 `similarity` 값을 실제로 채워야 여기서 쓸 수 있음 — Step 2/6이
   서로 연결되어 있으니 순서 유의.
 
-### Step 7 — `question_analyzer.py` 구현 (LLM 호출 필요 — 공용 서비스 신규 작성) ⬜ 남은 유일한 단계
+### Step 7 — `question_analyzer.py` 구현 (LLM 호출 — LangChain 패턴, 2026-08-23 확정) ⬜ 남은 유일한 단계
 
-가장 마지막에 하는 이유: `EmbeddingService`에 대응하는 `ChatCompletionService`
-같은 게 아직 없어서(설계 문서 2.4 참고) 새로 만들어야 함. **이 서비스는
-`response_composer.py`(팀원 파트)도 필요로 하는 공용 자원** — 먼저 만드는
-사람이 만들고 인터페이스를 공유하는 게 나음. 중복 구현 방지를 위해
-**팀원과 먼저 짧게 맞추고 시작할 것**(누가 만들지, 시그니처는 어떻게 할지).
+원래는 `EmbeddingService`처럼 SDK를 직접 호출하는 `ChatCompletionService`를
+새로 만들 계획이었는데, 팀원의 `response_composer.py`(`app/ai/answer_generator.py`)가
+이미 LangChain(`ChatPromptTemplate | AzureChatOpenAI | StrOutputParser`) 방식으로
+구현돼 있어서 **같은 패턴으로 통일하기로 팀과 확정함(2026-08-23)**. 별도
+공용 서비스 클래스를 새로 안 만들어도 되고, `answer_generator.py` 구조를
+그대로 참고해서 구현하면 됨.
 
-제안 시그니처 (파일: `app/services/chat_completion.py`, `EmbeddingService`와
-동일한 클래스 패턴):
+제안 구현 (파일: `app/ai/question_classifier.py`, `answer_generator.py`와
+동일한 패턴 — `create_azure_answer_generator()` 옆에 나란히 두는 걸 추천):
 
 ```python
-class ChatCompletionService:
-    def __init__(self, client: AzureOpenAI, deployment: str) -> None:
-        ...
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import AzureChatOpenAI
 
-    def complete(self, system_prompt: str, user_message: str) -> str:
-        response = self._client.chat.completions.create(
-            model=self._deployment,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0,
-        )
-        return response.choices[0].message.content
+from app.dtos.question import QuestionKind
+
+
+def create_azure_question_classifier(config):
+    llm = AzureChatOpenAI(
+        azure_endpoint=config["AZURE_OPENAI_ENDPOINT"],
+        api_key=config["AZURE_OPENAI_API_KEY"],
+        azure_deployment=config["AZURE_OPENAI_NANO_DEPLOYMENT"],
+        temperature=0,
+    )
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", QUESTION_CLASSIFICATION_PROMPT),
+            ("human", "{question}"),
+        ]
+    )
+    return prompt | llm | StrOutputParser()
 ```
 
 `question_analyzer.py`:
@@ -605,31 +801,21 @@ def classify_question(state: QAState) -> dict:
     if state.get("question_kind"):
         return {}  # 프론트가 이미 넘겨줌 — 스킵
 
-    deployment = current_app.config["AZURE_OPENAI_NANO_DEPLOYMENT"]
-    client = create_azure_openai_client(current_app.config)
-    service = ChatCompletionService(client, deployment)
-
-    raw = service.complete(QUESTION_CLASSIFICATION_PROMPT, state["question"])
+    classifier = create_azure_question_classifier(current_app.config)
+    raw = classifier.invoke({"question": state["question"]})
     kind = raw.strip().lower()
-    if kind not in {"intent", "impact", "location", "flow"}:
-        kind = "location"  # 방어적 fallback
+    if kind not in {k.value for k in QuestionKind}:
+        kind = QuestionKind.LOCATION  # 방어적 fallback
 
-    return {"question_kind": kind}
+    return {"question_kind": QuestionKind(kind)}
 ```
 
 - `app/ai/generation/prompts.py`의 `QUESTION_CLASSIFICATION_PROMPT`도 이때
   같이 채워야 함 — "intent/impact/location/flow 중 정확히 하나만, 다른 말
   없이 그 단어만 출력하라"는 지시를 명확히 넣을 것(파싱 안정성을 위해).
-- **⚠️ 놓치기 쉬운 부분**: `app/config.py`의 `BaseConfig`에 지금
-  `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`만 등록되어 있고
-  `AZURE_OPENAI_DEPLOYMENT`/`AZURE_OPENAI_NANO_DEPLOYMENT`는 **없음**. `.env`에
-  값이 있어도 `current_app.config.get("AZURE_OPENAI_NANO_DEPLOYMENT")`가
-  `None`을 반환함 — Flask의 `app.config.from_object()`는 Config 클래스에
-  명시된 속성만 가져오기 때문. 아래 두 줄을 `BaseConfig`에 추가해야 함:
-  ```python
-  AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-  AZURE_OPENAI_NANO_DEPLOYMENT = os.getenv("AZURE_OPENAI_NANO_DEPLOYMENT")
-  ```
+- ~~`app/config.py`에 `AZURE_OPENAI_DEPLOYMENT`/`AZURE_OPENAI_NANO_DEPLOYMENT`
+  추가 필요~~ — **이미 팀원이 추가해둠**(0-4 참고), 이 단계에서 더 손댈 것
+  없음.
 
 ### Step 8 — 팀원(Response Composer)에게 넘기는 계약 재확인
 
@@ -685,8 +871,9 @@ def classify_question(state: QAState) -> dict:
    수정 (mock 재검증)
 3. `changed_by_history` 재작성 — `CHANGED_BY` 배치 없이 기존
    `HAS_VERSION`/`INTRODUCED_IN`/`DELETED_IN`으로 바로 구현
-4. Step 7 (질문 분류) — 팀원과 `ChatCompletionService` 조율 먼저 필요
-5. `scripts/link_changed_by.py`는 보류(당장 손 안 댐)
+4. ~~Step 7 (질문 분류)~~ (2026-08-23: 구현 완료 + 전체 파이프라인 실 데이터
+   테스트까지 통과, 0-7 참고 — **내 파트 전체(Step 1~7) 완료**)
+5. `scripts/link_changed_by.py`는 보류(당장 손 안 댐, 그래프 담당자 승인 필요)
 
 <details>
 <summary>2026-08-19 시점 원래 우선순위(참고용, 접어둠)</summary>
@@ -708,7 +895,22 @@ def classify_question(state: QAState) -> dict:
 
 ## 5. 협의/확인이 필요한 항목 (혼자 결정하지 말고 팀에 확인)
 
-- `ChatCompletionService`를 내가 만들지, response_composer 담당자가 만들지 — 중복 구현 방지
+- ~~`ChatCompletionService`를 내가 만들지, response_composer 담당자가 만들지~~
+  (2026-08-23 해결: LangChain 패턴으로 통일하기로 확정, 0-5 참고 — 더 이상
+  협의 필요 없음)
+- **(0-4/0-5 — 내일 회의 안건, 0-7에서 실 데이터로 재현 확인함)** intent/impact
+  질문에서 `CHANGE_HISTORY`/`DEPENDENCY` 시각화 빌더가 아직 없어서
+  `visualization`이 항상 `None`으로 나옴 (`CallFlowBuilder`만 구현됨) — 누가
+  만들지 / 당장은 CALL_FLOW만 지원할지 확정 필요
+- **(신규, 0-7)** `changed_by_history` 그래프 쿼리가 찾는 `DELETED_IN` 관계가
+  현재 Neo4j에 하나도 없음(경고만 뜨고 에러는 아님) — 그래프 담당자에게 의도된
+  상태인지 확인 필요
+- **(0-4/0-5 — 내일 회의 안건, 0-7에서 코드 레벨로 확인함)**
+  `evidence_fusion.py`의 `state["evidence"]`가 `response_input_adapter.py`에서
+  전혀 안 읽힘 — `evidence_fusion.py` 자체를 없앨지, adapter가 evidence를
+  쓰도록 고칠지 결정 필요
+- **(신규, 0-4/0-5 — 내일 회의 안건)** 최종 응답 DTO(`QueryResponse`)에
+  구조화된 근거 목록이 빠진 것 — 프론트에 별도로 보여줄 계획이 있는지
 - 세션 ↔ 레포 매핑(`SessionCreateRequest.repo_id` → `github_repository_id`)이 아직 없어서, 지금은 `run_qa_pipeline()`을 테스트할 때 `github_repository_id`를 하드코딩해서 넘겨야 함 — 이건 `qa_service.py` 담당자(팀원 or 별도 담당) 몫이지만 내 노드들의 입력값이라 진행 상황 공유는 필요
 - Neo4j client를 앱 전역 리소스로 등록할지(현재 `app/extensions.py`엔 없음) — 인프라 개선이라 별도 논의
 - ~~`CHANGED_BY` 엣지(Method↔Commit)는 그래프 담당자 별도 작업이었는데...~~

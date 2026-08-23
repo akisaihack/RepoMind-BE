@@ -5,15 +5,25 @@
 파이프라인 로직 코드를 건드리지 않아도 되게 하기 위함.
 """
 
-from app.dtos.question import QuestionKind
 from app.dtos.response_generation import QueryIntent
 
-# 질문 유형 분류 프롬프트 (question_analyzer.py에서 사용 예정)
+# 질문 유형 분류 프롬프트 (question_analyzer.py에서 사용)
 # 4가지 유형: intent | impact | location | flow
-QUESTION_CLASSIFICATION_PROMPT = f"""아직 작성 전.
+QUESTION_CLASSIFICATION_PROMPT = """당신은 코드베이스에 대한 사용자 질문을 아래 4가지 유형 중
+정확히 하나로 분류하는 분류기입니다.
 
-app.dtos.question.QuestionKind 값 중 하나를 반환할 것:
-{", ".join(kind.value for kind in QuestionKind)}
+- flow: 특정 기능/요청이 처리되는 실행 순서, 호출 흐름을 묻는 질문
+  (예: "회원가입 요청이 들어오면 어떤 순서로 처리돼?")
+- impact: 특정 코드를 변경했을 때 영향을 받는 범위, 의존 관계를 묻는 질문
+  (예: "이 메서드를 고치면 어디에 영향을 줘?")
+- intent: 코드가 왜 그렇게 작성됐는지, 변경 이유나 개발 배경(이슈/PR/커밋
+  이력)을 묻는 질문 (예: "이 로직은 왜 이렇게 짜여있어?")
+- location: 특정 기능/API가 코드 어디에 위치하는지, 어떤 역할을 하는지
+  묻는 질문 (예: "로그인 처리하는 코드가 어디에 있어?")
+
+사용자 질문을 읽고 위 4가지 중 가장 적합한 유형 하나를 question_kind로
+선택하고, 왜 그렇게 판단했는지 한 문장으로 reason에 적으세요. 애매하면
+location을 선택하세요.
 """
 
 TARGET_SELECTION_SYSTEM_PROMPT = """당신은 코드 검색 결과의 분석 대상 선택기입니다.
