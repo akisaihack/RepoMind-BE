@@ -4,17 +4,23 @@ from dataclasses import asdict
 from http import HTTPStatus
 from uuid import UUID
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request
 
-from app.dtos.sessions import SessionCreateRequest, SessionResponse
+from app.dtos.sessions import (
+    ChatMessageInfo,
+    MessageHistoryResponse,
+    SessionCreateRequest,
+    SessionResponse,
+)
 from app.errors import APIError
 from app.extensions import db
+from app.models.chat_message import ChatMessage
 from app.models.chat_session import ChatSession
 from app.models.repository import RepositoryAnalysisStatus
+from app.repositories.chat_message import ChatMessagePersistenceError, ChatMessageStore
 from app.repositories.chat_session import ChatSessionPersistenceError, ChatSessionStore
 from app.repositories.repository import RepositoryPersistenceError, RepositoryStore
 from app.responses import success_response
-from app.sample.mock_sessions import get_mock_message_history, get_mock_session_list
 
 sessions_bp = Blueprint("sessions", __name__)
 
@@ -25,6 +31,10 @@ def _get_repository_store() -> RepositoryStore:
 
 def _get_chat_session_store() -> ChatSessionStore:
     return ChatSessionStore(db.session)
+
+
+def _get_chat_message_store() -> ChatMessageStore:
+    return ChatMessageStore(db.session)
 
 
 def _parse_repository_id(value: object) -> UUID:
@@ -51,6 +61,13 @@ def _parse_title(value: object) -> str | None:
     return title
 
 
+def _parse_session_id(value: str) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise APIError("INVALID_SESSION_ID", "session_id must be a UUID.") from exc
+
+
 def _to_session_response(chat_session: ChatSession) -> SessionResponse:
     return SessionResponse(
         session_id=str(chat_session.id),
@@ -58,6 +75,16 @@ def _to_session_response(chat_session: ChatSession) -> SessionResponse:
         title=chat_session.title,
         created_at=chat_session.created_at.isoformat(),
         updated_at=chat_session.updated_at.isoformat(),
+    )
+
+
+def _to_chat_message_info(message: ChatMessage) -> ChatMessageInfo:
+    return ChatMessageInfo(
+        message_id=str(message.id),
+        role=message.role,
+        content=message.content,
+        structured_answer=message.structured_answer,
+        created_at=message.created_at.isoformat(),
     )
 
 
@@ -119,15 +146,75 @@ def create_session():
 
 @sessions_bp.get("/<session_id>/messages")
 def get_session_messages(session_id: str):
-    """Return Mock chat history until the DB-backed history endpoint is added."""
+    """Return persisted chat messages for one existing session."""
 
-    response_data = get_mock_message_history(session_id)
-    return jsonify({"success": True, "data": asdict(response_data)}), HTTPStatus.OK
+    parsed_session_id = _parse_session_id(session_id)
+    session_store = _get_chat_session_store()
+
+    try:
+        chat_session = session_store.get(parsed_session_id)
+    except ChatSessionPersistenceError as exc:
+        raise APIError(
+            "SESSION_RETRIEVAL_FAILED",
+            "Chat session details could not be loaded.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    if chat_session is None:
+        raise APIError(
+            "SESSION_NOT_FOUND",
+            "The requested chat session does not exist.",
+            status=HTTPStatus.NOT_FOUND,
+        )
+
+    try:
+        messages = _get_chat_message_store().list_by_session(parsed_session_id)
+    except ChatMessagePersistenceError as exc:
+        raise APIError(
+            "MESSAGE_RETRIEVAL_FAILED",
+            "Chat messages could not be loaded.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    response_data = MessageHistoryResponse(
+        session_id=str(chat_session.id),
+        messages=[_to_chat_message_info(message) for message in messages],
+    )
+    return success_response(asdict(response_data))
 
 
 @sessions_bp.get("/")
 def list_sessions():
-    """Return Mock chat sessions until the DB-backed listing endpoint is added."""
+    """Return persisted chat sessions belonging to one repository."""
 
-    repo_id = request.args.get("repo_id")
-    return jsonify({"success": True, "data": get_mock_session_list(repo_id)}), HTTPStatus.OK
+    repository_id = _parse_repository_id(request.args.get("repo_id"))
+    repository_store = _get_repository_store()
+
+    try:
+        repository = repository_store.get(repository_id)
+    except RepositoryPersistenceError as exc:
+        raise APIError(
+            "REPOSITORY_RETRIEVAL_FAILED",
+            "Repository details could not be loaded.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    if repository is None:
+        raise APIError(
+            "REPOSITORY_NOT_FOUND",
+            "The requested repository does not exist.",
+            status=HTTPStatus.NOT_FOUND,
+        )
+
+    try:
+        sessions = _get_chat_session_store().list_by_repository(repository_id)
+    except ChatSessionPersistenceError as exc:
+        raise APIError(
+            "SESSION_RETRIEVAL_FAILED",
+            "Chat sessions could not be loaded.",
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        ) from exc
+
+    return success_response(
+        {"sessions": [asdict(_to_session_response(chat_session)) for chat_session in sessions]}
+    )
