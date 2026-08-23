@@ -52,6 +52,24 @@ def test_creates_user_and_assistant_messages_with_structured_answer(app) -> None
         assert chat_session.updated_at >= previous_updated_at
 
 
+def test_exchange_always_orders_user_message_before_assistant_message(app) -> None:
+    with app.app_context():
+        chat_session = _chat_session(suffix="exchange-order")
+        db.session.add(chat_session)
+        db.session.commit()
+        store = ChatMessageStore(db.session)
+
+        user_message, assistant_message = store.create_exchange(
+            session_id=chat_session.id,
+            question="질문",
+            answer="답변",
+            structured_answer={"summary": "답변"},
+        )
+
+        assert user_message.created_at < assistant_message.created_at
+        assert store.list_by_session(chat_session.id) == [user_message, assistant_message]
+
+
 def test_lists_messages_in_creation_order_within_session_only(app) -> None:
     with app.app_context():
         chat_session = _chat_session(suffix="history")

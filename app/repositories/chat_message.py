@@ -1,6 +1,6 @@
 """RDB access for messages persisted in chat sessions."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -74,16 +74,19 @@ class ChatMessageStore:
         if chat_session is None:
             raise ChatMessageSessionNotFoundError("Chat session not found.")
 
+        created_at = datetime.now(UTC)
         user_message = ChatMessage(
             session_id=session_id,
             role=ChatMessageRole.USER.value,
             content=question,
+            created_at=created_at,
         )
         assistant_message = ChatMessage(
             session_id=session_id,
             role=ChatMessageRole.ASSISTANT.value,
             content=answer,
             structured_answer=structured_answer,
+            created_at=created_at + timedelta(microseconds=1),
         )
         chat_session.updated_at = datetime.now(UTC)
         self._session.add_all([user_message, assistant_message])
@@ -138,6 +141,4 @@ class ChatMessageStore:
         try:
             return ChatMessageRole(role).value
         except ValueError as exc:
-            raise InvalidChatMessageRoleError(
-                "role must be either 'user' or 'assistant'."
-            ) from exc
+            raise InvalidChatMessageRoleError("role must be either 'user' or 'assistant'.") from exc
