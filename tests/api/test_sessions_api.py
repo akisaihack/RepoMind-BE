@@ -1,14 +1,19 @@
 """API tests for persisted chat session creation."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.api.v1 import sessions as sessions_api
 from app.extensions import db
 from app.models.chat_message import ChatMessage, ChatMessageRole
 from app.models.chat_session import DEFAULT_CHAT_SESSION_TITLE, ChatSession
 from app.models.repository import Repository, RepositoryAnalysisStatus
+from app.repositories.chat_message import ChatMessagePersistenceError
+from app.repositories.chat_session import ChatSessionPersistenceError
+from app.repositories.repository import RepositoryPersistenceError
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +76,13 @@ def _persist_message(
         return message.id
 
 
+def _assert_error(response, *, status_code: int, code: str) -> None:
+    assert response.status_code == status_code
+    payload = response.get_json()
+    assert payload["success"] is False
+    assert payload["error"]["code"] == code
+
+
 def test_creates_persisted_session_for_ready_repository(client, app) -> None:
     repository_id = _persist_repository(app, status=RepositoryAnalysisStatus.READY)
 
@@ -119,15 +131,13 @@ def test_rejects_invalid_session_create_request(client, payload, error_code: str
     else:
         response = client.post("/api/v1/sessions/", json=payload)
 
-    assert response.status_code == 400
-    assert response.get_json()["error"]["code"] == error_code
+    _assert_error(response, status_code=400, code=error_code)
 
 
 def test_returns_not_found_for_unknown_repository(client) -> None:
     response = client.post("/api/v1/sessions/", json={"repo_id": str(uuid4())})
 
-    assert response.status_code == 404
-    assert response.get_json()["error"]["code"] == "REPOSITORY_NOT_FOUND"
+    _assert_error(response, status_code=404, code="REPOSITORY_NOT_FOUND")
 
 
 @pytest.mark.parametrize(
@@ -144,7 +154,9 @@ def test_rejects_session_creation_before_repository_is_ready(client, app, status
     response = client.post("/api/v1/sessions/", json={"repo_id": str(repository_id)})
 
     assert response.status_code == 409
-    error = response.get_json()["error"]
+    payload = response.get_json()
+    assert payload["success"] is False
+    error = payload["error"]
     assert error["code"] == "REPOSITORY_NOT_READY"
     assert error["details"] == {"analysis_status": status.value}
     with app.app_context():
@@ -188,8 +200,7 @@ def test_lists_only_repository_sessions_in_recent_activity_order(client, app) ->
 def test_returns_not_found_when_listing_unknown_repository_sessions(client) -> None:
     response = client.get(f"/api/v1/sessions/?repo_id={uuid4()}")
 
-    assert response.status_code == 404
-    assert response.get_json()["error"]["code"] == "REPOSITORY_NOT_FOUND"
+    _assert_error(response, status_code=404, code="REPOSITORY_NOT_FOUND")
 
 
 def test_returns_empty_message_history_for_session_without_messages(client, app) -> None:
@@ -261,5 +272,82 @@ def test_returns_messages_in_order_with_structured_answer(client, app) -> None:
 def test_returns_not_found_for_unknown_session_history(client) -> None:
     response = client.get(f"/api/v1/sessions/{uuid4()}/messages")
 
-    assert response.status_code == 404
-    assert response.get_json()["error"]["code"] == "SESSION_NOT_FOUND"
+    _assert_error(response, status_code=404, code="SESSION_NOT_FOUND")
+
+
+@pytest.mark.parametrize(
+    ("url", "code"),
+    [
+        ("/api/v1/sessions/", "INVALID_REPOSITORY_ID"),
+        ("/api/v1/sessions/?repo_id=not-a-uuid", "INVALID_REPOSITORY_ID"),
+        ("/api/v1/sessions/not-a-uuid/messages", "INVALID_SESSION_ID"),
+    ],
+)
+def test_rejects_invalid_session_lookup_identifiers(client, url: str, code: str) -> None:
+    response = client.get(url)
+
+    _assert_error(response, status_code=400, code=code)
+
+
+def test_converts_repository_retrieval_failure_to_service_unavailable(client, monkeypatch) -> None:
+    repository_store = Mock()
+    repository_store.get.side_effect = RepositoryPersistenceError("database unavailable")
+    monkeypatch.setattr(sessions_api, "_get_repository_store", lambda: repository_store)
+
+    response = client.post("/api/v1/sessions/", json={"repo_id": str(uuid4())})
+
+    _assert_error(response, status_code=503, code="REPOSITORY_RETRIEVAL_FAILED")
+
+
+def test_converts_session_create_failure_to_service_unavailable(client, app, monkeypatch) -> None:
+    repository_id = _persist_repository(app, status=RepositoryAnalysisStatus.READY)
+    session_store = Mock()
+    session_store.create.side_effect = ChatSessionPersistenceError("database unavailable")
+    monkeypatch.setattr(sessions_api, "_get_chat_session_store", lambda: session_store)
+
+    response = client.post("/api/v1/sessions/", json={"repo_id": str(repository_id)})
+
+    _assert_error(response, status_code=503, code="SESSION_PERSISTENCE_FAILED")
+
+
+def test_converts_session_list_failure_to_service_unavailable(client, app, monkeypatch) -> None:
+    repository_id = _persist_repository(app, status=RepositoryAnalysisStatus.READY)
+    session_store = Mock()
+    session_store.list_by_repository.side_effect = ChatSessionPersistenceError(
+        "database unavailable"
+    )
+    monkeypatch.setattr(sessions_api, "_get_chat_session_store", lambda: session_store)
+
+    response = client.get(f"/api/v1/sessions/?repo_id={repository_id}")
+
+    _assert_error(response, status_code=503, code="SESSION_RETRIEVAL_FAILED")
+
+
+def test_converts_session_history_lookup_failure_to_service_unavailable(
+    client,
+    monkeypatch,
+) -> None:
+    session_store = Mock()
+    session_store.get.side_effect = ChatSessionPersistenceError("database unavailable")
+    monkeypatch.setattr(sessions_api, "_get_chat_session_store", lambda: session_store)
+
+    response = client.get(f"/api/v1/sessions/{uuid4()}/messages")
+
+    _assert_error(response, status_code=503, code="SESSION_RETRIEVAL_FAILED")
+
+
+def test_converts_message_history_failure_to_service_unavailable(client, app, monkeypatch) -> None:
+    repository_id = _persist_repository(app, status=RepositoryAnalysisStatus.READY)
+    session_id = _persist_chat_session(
+        app,
+        repository_id=repository_id,
+        title="조회 실패 대화",
+        updated_at=datetime.now(UTC),
+    )
+    message_store = Mock()
+    message_store.list_by_session.side_effect = ChatMessagePersistenceError("database unavailable")
+    monkeypatch.setattr(sessions_api, "_get_chat_message_store", lambda: message_store)
+
+    response = client.get(f"/api/v1/sessions/{session_id}/messages")
+
+    _assert_error(response, status_code=503, code="MESSAGE_RETRIEVAL_FAILED")
