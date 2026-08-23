@@ -1,7 +1,6 @@
 """Data Transfer Objects for Session Management API."""
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -17,7 +16,7 @@ class SessionCreateRequest:
     @param title 대화방 이름 (선택 사항)
     """
     repo_id: str
-    title: Optional[str] = None
+    title: str | None = None
 
 
 @dataclass
@@ -29,11 +28,13 @@ class SessionResponse:
     @param repo_id 이 세션과 연결된 레포지토리 ID
     @param title 대화방 이름
     @param created_at 세션 생성 시각 (ISO 8601)
+    @param updated_at 세션 최종 수정 시각 (ISO 8601)
     """
     session_id: str
     repo_id: str
     title: str
     created_at: str
+    updated_at: str
 
 
 @dataclass
