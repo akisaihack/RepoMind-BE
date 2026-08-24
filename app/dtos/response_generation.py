@@ -97,6 +97,16 @@ class GeneratedClaim(BaseModel):
     title: str
     content: str
     evidence_ids: list[str] = Field(default_factory=list, alias="evidenceIds")
+    citations: list["GeneratedCitation"] = Field(default_factory=list)
+
+
+class GeneratedCitation(BaseModel):
+    """Evidence references for one paragraph or list item inside a claim."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    content: str
+    evidence_ids: list[str] = Field(default_factory=list, alias="evidenceIds")
 
 
 class GeneratedAnswer(BaseModel):
@@ -114,6 +124,7 @@ __all__ = [
     "GraphNode",
     "GraphResponse",
     "GeneratedAnswer",
+    "GeneratedCitation",
     "GeneratedClaim",
     "QueryIntent",
     "QueryResponse",

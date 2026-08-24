@@ -20,6 +20,7 @@ from app.ai.generation.prompts import (
 from app.clients.azure_openai import AZURE_OPENAI_API_VERSION
 from app.dtos.response_generation import (
     GeneratedAnswer,
+    GeneratedCitation,
     GeneratedClaim,
     ResponseGenerationInput,
 )
@@ -122,7 +123,24 @@ def _parse_and_validate_answer(raw_answer: str, evidence: list[Any]) -> Generate
         )
         claims.append(
             claim.model_copy(
-                update={"id": claim_id, "evidence_ids": evidence_ids},
+                update={
+                    "id": claim_id,
+                    "evidence_ids": evidence_ids,
+                    "citations": [
+                        GeneratedCitation(
+                            content=citation.content,
+                            evidenceIds=list(
+                                dict.fromkeys(
+                                    evidence_id
+                                    for evidence_id in citation.evidence_ids
+                                    if evidence_id in allowed_evidence_ids
+                                )
+                            ),
+                        )
+                        for citation in claim.citations
+                        if citation.content.strip()
+                    ],
+                },
             )
         )
     return parsed.model_copy(update={"claims": claims})

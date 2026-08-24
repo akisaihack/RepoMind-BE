@@ -119,6 +119,12 @@ def test_answer_generator_removes_unknown_and_duplicate_evidence_ids() -> None:
                             "invented-id",
                             "evidence:code:valid",
                         ],
+                        "citations": [
+                            {
+                                "content": "서비스에서 취소합니다.",
+                                "evidenceIds": ["invented-id", "evidence:code:valid"],
+                            }
+                        ],
                     }
                 ],
                 "uncertainties": [],
@@ -128,6 +134,7 @@ def test_answer_generator_removes_unknown_and_duplicate_evidence_ids() -> None:
     result = AnswerGenerator(RunnableLambda(answer)).generate(input_data)
 
     assert result.claims[0].evidence_ids == ["evidence:code:valid"]
+    assert result.claims[0].citations[0].evidence_ids == ["evidence:code:valid"]
 
 
 def test_answer_generator_falls_back_when_provider_returns_plain_text() -> None:

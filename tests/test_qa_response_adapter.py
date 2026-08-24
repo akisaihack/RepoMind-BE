@@ -62,7 +62,7 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
     assert result.claims[0].evidenceIds == ["method:1", "method:2"]
     assert result.confidence.level == "high"
     assert result.uncertainties == []
-    assert result.graph.nodes[0].type == "symbol"
+    assert result.graph.nodes == []
     assert result.graph.kind == "flow"
     assert result.suggestedQuestions == ["이 흐름을 수정하면 영향 범위가 어떻게 돼?"]
 
@@ -85,6 +85,12 @@ def test_uses_llm_generated_claims_without_copying_summary() -> None:
                 title="JWT 추출",
                 content="Authorization 헤더에서 JWT를 추출합니다.",
                 evidenceIds=["evidence:jwt"],
+                citations=[
+                    {
+                        "content": "Authorization 헤더에서 JWT를 추출합니다.",
+                        "evidenceIds": ["evidence:jwt", "unknown"],
+                    }
+                ],
             )
         ],
         uncertainties=["필터 등록 순서는 제공된 근거로 확인할 수 없습니다."],
@@ -110,6 +116,7 @@ def test_uses_llm_generated_claims_without_copying_summary() -> None:
     assert result.summary == "JWT 요청 인증 흐름입니다."
     assert result.claims[0].content != result.summary
     assert result.claims[0].evidenceIds == ["evidence:jwt"]
+    assert result.claims[0].citations[0].evidenceIds == ["evidence:jwt"]
     assert result.uncertainties == ["필터 등록 순서는 제공된 근거로 확인할 수 없습니다."]
 
 
@@ -192,6 +199,32 @@ def test_falls_back_to_retrieval_graph_when_no_visualization_is_available() -> N
     assert result.graph.kind == "relationship"
     assert result.graph.edges[0].label == "introduced_in"
     assert result.confidence.level == "medium"
+
+
+def test_flow_never_falls_back_to_unprojected_retrieval_graph() -> None:
+    result = QAResponseAdapter().adapt(
+        {
+            "question": "로그인 흐름",
+            "github_repository_id": 1,
+            "evidence": [],
+            "graph_results": {
+                "nodes": [{"id": "commit:1", "type": "commit", "label": "sha"}],
+                "edges": [
+                    {
+                        "id": "history",
+                        "source": "commit:1",
+                        "target": "version:1",
+                        "type": "INTRODUCED_IN",
+                    }
+                ],
+            },
+        },
+        {"answer": "근거 부족", "intent": "FLOW"},
+    )
+
+    assert result.graph.kind == "flow"
+    assert result.graph.nodes == []
+    assert result.graph.edges == []
 
 
 def test_marks_answer_as_uncertain_when_evidence_is_missing_or_insufficient() -> None:
