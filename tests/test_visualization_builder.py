@@ -1,5 +1,8 @@
 """Deterministic visualization builder tests."""
 
+import json
+from pathlib import Path
+
 from app.dtos.response_generation import (
     QueryIntent,
     ResponseGenerationInput,
@@ -153,3 +156,28 @@ def test_call_flow_connects_frontend_http_request_to_controller_and_service() ->
     }
     connected_ids = {node_id for edge in result.edges for node_id in (edge.source, edge.target)}
     assert {node.id for node in result.nodes} == connected_ids
+
+
+def test_username_flow_fixture_excludes_history_and_internal_graph_nodes() -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "flow_username_check.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    input_data = ResponseGenerationInput(
+        question=fixture["question"],
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(graph=fixture["graph"]),
+    )
+
+    result = VisualizationBuilder().build(input_data)
+
+    assert result is not None
+    assert {edge.type for edge in result.edges} <= {"CALLS", "HTTP_CALLS", "HANDLED_BY"}
+    connected_ids = {node_id for edge in result.edges for node_id in (edge.source, edge.target)}
+    assert {node.id for node in result.nodes} == connected_ids
+    assert not {node.id for node in result.nodes} & {
+        "commit:username",
+        "class:controller",
+        "version:frontend",
+        "version:controller",
+    }
