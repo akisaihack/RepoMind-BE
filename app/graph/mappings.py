@@ -27,8 +27,15 @@ app/graph/repositories/에 있음. 이 모듈은 "파싱 결과를 어떤 노드
 
 from collections.abc import Iterable
 
-from app.dtos.analysis import JavaClassResult, JavaFileResult, JavaMethodResult
+from app.dtos.analysis import (
+    JavaClassResult,
+    JavaFileResult,
+    JavaMethodResult,
+    JavaScriptFileResult,
+    PythonFileResult,
+)
 from app.dtos.graph import GraphDocument, GraphEdge, GraphNode
+from app.dtos.protocols import ClassResultProtocol, FileResultProtocol, MethodResultProtocol
 from app.graph.identifiers import (
     class_key,
     constructor_key,
@@ -70,10 +77,11 @@ def _build_package_node(github_repository_id: int, package_name: str) -> GraphNo
 
 def _build_class_node(
     class_id: str,
-    class_result: JavaClassResult,
+    class_result: ClassResultProtocol,
     qualified_name: str,
     file_path: str,
     github_repository_id: int,
+    language: str,
 ) -> GraphNode:
     node_type = "Interface" if class_result.kind == "interface" else "Class"
     return GraphNode(
@@ -85,6 +93,7 @@ def _build_class_node(
             "layer": class_result.layer,
             "path": file_path,
             "githubRepositoryId": github_repository_id,
+            "language": language,
             # Neo4j properties cannot contain maps; keep field metadata as a
             # primitive string array that can be stored and queried directly.
             "fields": [f"{field.type} {field.name}" for field in class_result.fields],
@@ -94,10 +103,11 @@ def _build_class_node(
 
 def _build_method_node(
     method_id: str,
-    method_result: JavaMethodResult,
-    class_result: JavaClassResult,
+    method_result: MethodResultProtocol,
+    class_result: ClassResultProtocol,
     class_qualified_name: str,
     github_repository_id: int,
+    language: str,
 ) -> GraphNode:
     properties: dict = {
         "name": method_result.name,
@@ -107,6 +117,7 @@ def _build_method_node(
         "class_name": class_result.name,
         "class_qualified_name": class_qualified_name,
         "githubRepositoryId": github_repository_id,
+        "language": language,
     }
     if method_result.api_mapping:
         properties["http_method"] = method_result.api_mapping.http_method
@@ -117,9 +128,10 @@ def _build_method_node(
 def _build_method_version_node(
     version_id: str,
     method_id: str,
-    method_result: JavaMethodResult,
+    method_result: MethodResultProtocol,
     github_repository_id: int,
     content_hash: str,
+    language: str,
 ) -> GraphNode:
     properties: dict = {
         "methodKey": method_id,
@@ -128,6 +140,11 @@ def _build_method_version_node(
         "startLine": method_result.start_line,
         "endLine": method_result.end_line,
         "githubRepositoryId": github_repository_id,
+        # CALLS 엣지의 source가 Method가 아니라 MethodVersion 노드이기 때문에
+        # (아래 _map_file_document의 HAS_VERSION/CALLS 배선 참고), 언어 스코핑을
+        # 하려면 이 노드도 자기 언어를 알아야 함 — 없으면 resolve_cross_file_
+        # references가 모든 CALLS 엣지를 "java" 기본값으로 잘못 취급하게 됨.
+        "language": language,
     }
     if method_result.api_mapping:
         properties["httpMethod"] = method_result.api_mapping.http_method
@@ -161,7 +178,7 @@ def _build_imports_edges(class_id: str, imports: tuple[str, ...]) -> list[GraphE
     ]
 
 
-def _build_extends_edge(class_id: str, class_result: JavaClassResult) -> GraphEdge | None:
+def _build_extends_edge(class_id: str, class_result: ClassResultProtocol) -> GraphEdge | None:
     if not class_result.extends:
         return None
     return GraphEdge(
@@ -172,14 +189,14 @@ def _build_extends_edge(class_id: str, class_result: JavaClassResult) -> GraphEd
     )
 
 
-def _build_implements_edges(class_id: str, class_result: JavaClassResult) -> list[GraphEdge]:
+def _build_implements_edges(class_id: str, class_result: ClassResultProtocol) -> list[GraphEdge]:
     return [
         GraphEdge(type="IMPLEMENTS", source=class_id, target=name, properties={"resolved": False})
         for name in class_result.implements
     ]
 
 
-def _build_manages_edge(class_id: str, class_result: JavaClassResult) -> GraphEdge | None:
+def _build_manages_edge(class_id: str, class_result: ClassResultProtocol) -> GraphEdge | None:
     """Repository 계층 클래스가 다루는 Entity 추론 (예: JpaRepository<Poll, Long> -> Poll)."""
     if class_result.layer != "Repository" or not class_result.extends_generic_params:
         return None
@@ -189,7 +206,7 @@ def _build_manages_edge(class_id: str, class_result: JavaClassResult) -> GraphEd
     )
 
 
-def _resolve_receiver_type(receiver: str | None, class_result: JavaClassResult) -> str | None:
+def _resolve_receiver_type(receiver: str | None, class_result: ClassResultProtocol) -> str | None:
     """호출 리시버 식별자를 (아는 한도 내에서) 타입 이름으로 바꿔줌.
 
     리시버가 없으면(`foo()`) 같은 클래스 메서드 호출로 가정하고 자기 자신의
@@ -205,7 +222,7 @@ def _resolve_receiver_type(receiver: str | None, class_result: JavaClassResult) 
 
 
 def _build_calls_edges(
-    method_id: str, method_result: JavaMethodResult, class_result: JavaClassResult
+    method_id: str, method_result: MethodResultProtocol, class_result: ClassResultProtocol
 ) -> list[GraphEdge]:
     edges: list[GraphEdge] = []
     for call in method_result.invoked_calls:
@@ -224,19 +241,29 @@ def _build_exposes_edge(method_id: str, endpoint_id: str) -> GraphEdge:
 
 
 # ---------- 1단계: 파일 하나 변환 ----------
+#
+# 언어별 진입점(map_java_file/map_javascript_file)은 전부 아래 _map_file_document
+# 하나로 위임함 — 로직은 완전히 언어 무관(파일 하나 -> 노드/엣지 변환 규칙 자체가
+# Java 전용이 아니라, 이미 검증된 것을 언어별로 복제하는 대신 재사용하는 것).
+# 실제로 언어마다 달라지는 부분은 전부 파서(app/parsers/languages/*.py)가 이미
+# FileResultProtocol 모양으로 정규화해서 내보내기 때문에 여기서는 분기가 필요 없음.
 
 
-def map_java_file(
+def _map_file_document(
     github_repository_id: int,
-    file_result: JavaFileResult,
+    file_result: FileResultProtocol,
     commit_hash: str,
+    *,
+    language: str,
 ) -> GraphDocument:
-    """자바 파일 파싱 결과 하나를 GraphDocument(노드+엣지)로 변환.
+    """파일 하나(어떤 언어든)의 파싱 결과를 GraphDocument(노드+엣지)로 변환.
 
     CALLS/EXTENDS/IMPLEMENTS/IMPORTS/MANAGES 엣지는 아직 미해결
     (target이 실제 노드 id가 아니라 이름 문자열) 상태로 나옴 — 프로젝트의
     모든 파일을 이 함수로 변환한 다음 resolve_cross_file_references()에
-    전부 넘겨야 최종 그래프가 완성됨.
+    전부 넘겨야 최종 그래프가 완성됨. Class/Method 노드에는 language
+    property가 붙어서, 이름이 우연히 겹치는 다른 언어의 심볼과 섞여서
+    resolve되지 않도록 함(resolve_cross_file_references 참고).
     """
     nodes: list[GraphNode] = []
     edges: list[GraphEdge] = []
@@ -269,7 +296,7 @@ def map_java_file(
     for class_result in file_result.classes:
         node_type = "Interface" if class_result.kind == "interface" else "Class"
         if not class_result.name:
-            raise ValueError(f"Unnamed Java declaration in {normalized_path}.")
+            raise ValueError(f"Unnamed {language} declaration in {normalized_path}.")
         qualified_name = class_result.qualified_name or java_qualified_name(
             file_result.package, (), class_result.name
         )
@@ -283,6 +310,7 @@ def map_java_file(
                 qualified_name,
                 normalized_path,
                 github_repository_id,
+                language,
             )
         )
         edges.append(
@@ -310,7 +338,7 @@ def map_java_file(
 
         for method_result in class_result.methods:
             if not method_result.name:
-                raise ValueError(f"Unnamed Java method in {qualified_name}.")
+                raise ValueError(f"Unnamed {language} method in {qualified_name}.")
             if method_result.is_constructor:
                 method_id = constructor_key(
                     class_id, class_result.name, method_result.param_signature
@@ -326,6 +354,7 @@ def map_java_file(
                     class_result,
                     qualified_name,
                     github_repository_id,
+                    language,
                 )
             )
             edges.append(_build_contains_edge(class_id, method_id))
@@ -338,6 +367,7 @@ def map_java_file(
                     method_result,
                     github_repository_id,
                     content_hash,
+                    language,
                 )
             )
             edges.append(
@@ -367,6 +397,49 @@ def map_java_file(
     return GraphDocument(nodes=tuple(nodes), edges=tuple(edges))
 
 
+def map_java_file(
+    github_repository_id: int,
+    file_result: JavaFileResult,
+    commit_hash: str,
+) -> GraphDocument:
+    """자바 파일 파싱 결과 하나를 GraphDocument(노드+엣지)로 변환.
+
+    실제 변환 로직은 _map_file_document()에 위임(language="java") — 동작은
+    이 함수가 분리돼 있던 이전과 완전히 동일함.
+    """
+    return _map_file_document(github_repository_id, file_result, commit_hash, language="java")
+
+
+def map_javascript_file(
+    github_repository_id: int,
+    file_result: JavaScriptFileResult,
+    commit_hash: str,
+) -> GraphDocument:
+    """JS/JSX 파일 파싱 결과 하나를 GraphDocument(노드+엣지)로 변환.
+
+    map_java_file과 동일하게 _map_file_document()에 위임(language="javascript").
+    file_result.package가 항상 None이라 package 노드/CONTAINS 엣지는 안 생기고,
+    나머지(File/Class/Method/CALLS 등)는 Java와 동일한 규칙으로 만들어짐.
+    """
+    return _map_file_document(
+        github_repository_id, file_result, commit_hash, language="javascript"
+    )
+
+
+def map_python_file(
+    github_repository_id: int,
+    file_result: PythonFileResult,
+    commit_hash: str,
+) -> GraphDocument:
+    """Python 파일 파싱 결과 하나를 GraphDocument(노드+엣지)로 변환.
+
+    map_java_file/map_javascript_file과 동일하게 _map_file_document()에
+    위임(language="python"). file_result.package가 항상 None이라 package
+    노드/CONTAINS 엣지는 안 생김.
+    """
+    return _map_file_document(github_repository_id, file_result, commit_hash, language="python")
+
+
 # ---------- 2단계: 여러 파일 합치고 이름 해석 ----------
 
 
@@ -378,6 +451,12 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
     인덱스로, IMPORTS는 import 문자열의 마지막 조각(단순 클래스명)을 클래스
     이름 인덱스로 찾아봄. 후보가 여럿이면 전부 연결하고 ambiguous=True,
     후보가 없으면 target을 원래 이름 그대로 두고 external=True로 표시함.
+
+    인덱스 키는 (language, name) 튜플임 — 여러 언어가 섞인 프로젝트에서
+    Java `save()`와 Python/JS `save()`가 이름만 같다는 이유로 잘못 이어지는
+    걸 막기 위함. edge의 source 노드가 속한 언어로만 후보를 찾고, 같은
+    언어에 후보가 없으면 다른 언어로 재시도하지 않고 곧장 external=True로
+    떨어짐(의도적 — 언어 경계를 넘는 이름 매칭은 대부분 우연의 일치일 뿐임).
     """
     all_nodes: list[GraphNode] = []
     all_edges: list[GraphEdge] = []
@@ -385,12 +464,19 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
         all_nodes.extend(document.nodes)
         all_edges.extend(document.edges)
 
-    methods_by_name: dict[str, list[str]] = {}
-    classes_by_name: dict[str, list[str]] = {}
-    classes_by_fqn: dict[str, list[str]] = {}
+    methods_by_name: dict[tuple[str, str], list[str]] = {}
+    classes_by_name: dict[tuple[str, str], list[str]] = {}
+    classes_by_fqn: dict[tuple[str, str], list[str]] = {}
     method_class_names: dict[str, set[str]] = {}
+    node_language: dict[str, str] = {}
     for node in all_nodes:
         name = node.properties.get("name")
+        language = node.properties.get("language", "java")
+        if node.type in ("Method", "MethodVersion", "Class", "Interface"):
+            # MethodVersion 포함: CALLS 엣지의 source는 Method가 아니라
+            # MethodVersion 노드 id라서(HAS_VERSION 배선), 여기 빠지면
+            # edge_language 조회가 항상 기본값 "java"로 폴백해버림.
+            node_language[node.id] = language
         if node.type == "Method":
             class_names = {
                 value
@@ -404,12 +490,12 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
         if not name:
             continue
         if node.type == "Method":
-            methods_by_name.setdefault(name, []).append(node.id)
+            methods_by_name.setdefault((language, name), []).append(node.id)
         elif node.type in ("Class", "Interface"):
-            classes_by_name.setdefault(name, []).append(node.id)
+            classes_by_name.setdefault((language, name), []).append(node.id)
             qualified_name = node.properties.get("qualified_name")
             if qualified_name:
-                classes_by_fqn.setdefault(qualified_name, []).append(node.id)
+                classes_by_fqn.setdefault((language, qualified_name), []).append(node.id)
 
     resolved_edges: list[GraphEdge] = []
     for edge in all_edges:
@@ -417,8 +503,14 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
             resolved_edges.append(edge)
             continue
 
+        # edge.source(호출/상속하는 쪽)의 언어로만 후보를 찾음 — source가
+        # Method/Class가 아닌 경우는 현재 미해결 엣지 타입(CALLS/EXTENDS/
+        # IMPLEMENTS/IMPORTS/MANAGES) 중엔 없으므로 항상 찾김. 못 찾으면
+        # (이론상 발생 안 함) "java" 기본값으로 안전하게 폴백.
+        edge_language = node_language.get(edge.source, "java")
+
         if edge.type == "CALLS":
-            candidates = methods_by_name.get(edge.target, [])
+            candidates = methods_by_name.get((edge_language, edge.target), [])
             # 리시버 타입을 알면(필드 타입 매칭 등) 그 타입 소속 메서드로 후보를 좁힘.
             # 좁혔더니 하나도 안 남으면(타입을 잘못 짚었거나 상속받은 메서드 등)
             # 원래 후보 목록으로 되돌아감 — 안 좁히는 것보다는 넓게라도 남기는 게 나음.
@@ -431,13 +523,13 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
                     candidates = narrowed
         elif edge.type == "IMPORTS":
             simple_name = edge.target.rsplit(".", 1)[-1]
-            candidates = classes_by_fqn.get(edge.target, []) or classes_by_name.get(
-                simple_name, []
-            )
+            candidates = classes_by_fqn.get(
+                (edge_language, edge.target), []
+            ) or classes_by_name.get((edge_language, simple_name), [])
         else:  # EXTENDS / IMPLEMENTS / MANAGES
-            candidates = classes_by_fqn.get(edge.target, []) or classes_by_name.get(
-                edge.target, []
-            )
+            candidates = classes_by_fqn.get(
+                (edge_language, edge.target), []
+            ) or classes_by_name.get((edge_language, edge.target), [])
 
         if not candidates:
             resolved_edges.append(

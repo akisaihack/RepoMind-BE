@@ -488,6 +488,166 @@ adapter가 같은 원본 데이터를 다시 정리해서 씀), 중복 로직 + 
 
 ---
 
+## 0-8. `/chat` 실제 파이프라인 연결 완료 확인 (2026-08-24, FE/BE 재풀 후)
+
+FE/BE 둘 다 다시 pull 받은 뒤 재확인함. **mock 데이터 반환하던 `/chat`이 이제
+실제 파이프라인에 연결됨.**
+
+**백엔드 (팀원 작업):**
+- `app/api/v1/chat.py`: `get_mock_chat_response()` 대신 `QAService.ask()` 호출로
+  교체됨. 세션/레포 상태 에러(`SESSION_NOT_FOUND`, `REPOSITORY_NOT_READY`,
+  `QA_PIPELINE_FAILED` 등)도 다 처리돼 있음.
+- `app/services/qa_service.py`(신규): 세션 id → `ChatSessionStore.get_with_repository()`로
+  레포 조회 → `github_repository_id` 꺼내서(0-7에서 얘기했던 UUID→int 변환
+  연결고리, 이미 구현됨) `run_qa_pipeline_state(...)` 호출.
+- `app/ai/rag/pipeline.py`에 `run_qa_pipeline_state()` 신규 추가됨 — 기존
+  `run_qa_pipeline()`(answer만 반환)은 내부적으로 이 함수를 감싸는 형태로
+  리팩터링됨(하위 호환 유지, 내가 쓰던 테스트 스크립트들 그대로 동작).
+- `app/adapters/qa_response_adapter.py`(신규, `QAResponseAdapter`): 내
+  `evidence_fusion.py`가 만든 `state["evidence"]`를 실제로 읽어서 프론트용
+  `ChatResponseData`(claims/evidence/confidence/graph/uncertainties/
+  suggestedQuestions)를 채움 — **0-7에서 발견한 "evidence_fusion 죽은 코드"
+  문제와 "구조화된 근거 목록 없음" 문제가 둘 다 해결됨** (5번 목록 갱신함).
+  `visualization`이 `None`이어도 `state["graph_results"]`로 폴백해서 그래프
+  데이터가 아예 안 실리진 않게 처리돼 있음 — DEPENDENCY/CHANGE_HISTORY 전용
+  빌더 부재 문제도 완전 해결은 아니지만 완화됨.
+- 문법 체크(`py_compile`) 통과, import 체인(`ChatMessageStore.create_exchange`,
+  `ChatSessionStore.get_with_repository` 등) 다 실제로 존재 확인함.
+
+**프론트엔드 (팀원 작업):**
+- `src/services/apiRepoMindService.ts`의 `askQuestion()`: 더 이상
+  `throw new Error('Not implemented yet')` 아님 — 세션 없으면 생성 →
+  `/sessions/{id}/chat` 호출 → 대화 이력 재조회해서 assistant 메시지 반환하는
+  실제 구현으로 교체됨.
+
+**결론: 이제 웹 화면에서 실제로 질문 입력 → 진짜 파이프라인 답변까지 전체
+플로우 테스트 가능한 상태.** `VITE_USE_MOCK` 환경변수가 `true`로 설정돼있지
+않은지만 확인하면 됨(기본은 실 API 씀).
+
+---
+
+## 0-9. JavaScript 파서 추가 (2026-08-24, 내 파트 범위 밖 — 그래프 담당자 확인 필요)
+
+RAG 파이프라인이 답을 못 주는 게 아니라, **그래프/청크 파이프라인 자체가
+Java만 봐서 대상 리포(`spring-security-react-ant-design-polls-app`)의
+React/JS 프론트엔드가 아예 안 잡힌다**는 문제를 발견해서, 승인받은 계획대로
+JavaScript 파서 + 공통 스캐폴딩을 추가함. **⚠️ 커밋/푸시는 안 했음 — 로컬
+워킹 트리에만 파일을 써놨고, 실제 커밋은 각자 확인 후 진행하는 걸로.**
+
+**⚠️ 이건 그래프 담당 팀원이 만든 파일들을 직접 건드린 작업임
+(`app/graph/mappings.py`, `app/services/code_graph_import.py`,
+`app/services/chunk_import.py`) — 머지 전에 반드시 그래프 담당자한테
+공유하고 확인받을 것.**
+
+**계획**: JS/Python/HTML 셋 다 그래프 레벨까지 만들기로 했었으나(JSP는
+범용 tree-sitter 문법이 없어서 이번 범위에서 제외 확정). 이번 세션에서
+**JavaScript + 공통 스캐폴딩**까지 완료했고, FE에서 실제로 질문 테스트까지
+해봐서 정상 동작 확인함(투표 버튼 클릭 → PollCard → PollList 콜 흐름을 정확히
+설명하는 답변 받음). **이어서 Python/HTML까지 마저 완료함 — 아래 0-10 참고.**
+
+**추가/수정된 파일:**
+- `app/dtos/protocols.py` (신규) — 언어 무관 구조적 계약(`FileResultProtocol`
+  등). 새 언어 DTO가 이 모양만 맞추면 그래프/청크 쪽 코드를 안 건드리고
+  바로 붙음.
+- `app/dtos/analysis.py` (수정) — `JavaScriptFileResult`/`ClassResult`/
+  `MethodResult` 추가. 기존 Java DTO는 안 건드림.
+- `app/parsers/languages/javascript.py` (신규) — JS/JSX tree-sitter 파서.
+  React class 컴포넌트 + 최상위 함수(화살표 함수 포함)까지 지원. 클래스 밖
+  최상위 함수는 파일당 합성 `{파일이름}$module` 클래스로 감싸서 기존
+  Class→Method 그래프 모양을 그대로 재사용(스키마 변경 없음).
+- `app/parsers/registry.py` (신규) — 확장자 → (파서, 그래프 매퍼) 디스패치
+  테이블 + `discover_source_files()`. `node_modules`/`.git`/`dist`/`build`
+  등 벤더 디렉터리는 아예 안으로 안 들어가게 걸러냄(`os.walk` prune 방식이라
+  `node_modules` 통째로 스킵 — 성능상 중요).
+- `app/graph/mappings.py` (수정) — **가장 신경 써야 할 파일.**
+  `map_java_file`/새 `map_javascript_file` 둘 다 공용 `_map_file_document()`로
+  위임하도록 리팩터링(동작은 Java 기존과 동일 — 기존
+  `tests/test_code_graph_mapper.py`의 모든 assert를 그대로 돌려서 확인함,
+  전부 통과). Class/Method/MethodVersion 노드에 `language` property 추가하고,
+  `resolve_cross_file_references()`의 이름 인덱스를 `(language, name)` 튜플
+  키로 바꿈 — Java `save()`와 JS `save()`처럼 이름이 우연히 겹칠 때 서로
+  잘못 이어지는 걸 막기 위함(수정 전엔 실제로 잘못 이어지는 걸 재현 테스트로
+  확인했고, 수정 후 해결 확인함 → `tests/test_cross_language_mapping.py`).
+- `app/services/chunking.py`, `code_graph_import.py`, `chunk_import.py`
+  (수정) — `*.java` 하드코딩 rglob을 `app/parsers/registry.py` 기반 루프로
+  교체. Java 전용 타입 힌트를 `FileResultProtocol` 등으로 일반화.
+- `pyproject.toml` (수정) — `tree-sitter-javascript>=0.23,<1` 의존성 추가
+  (설치된 tree-sitter 코어 0.26.0과 호환 확인함).
+- `tests/test_javascript_parser.py`, `test_parser_registry.py`,
+  `test_cross_language_mapping.py` (신규, 11개 테스트 전부 통과 확인).
+
+**검증한 것 / 못 한 것 (솔직하게):**
+- 순수 로직(파서 출력, 매퍼 출력, 레지스트리 디스패치, 크로스 언어 이름
+  충돌 수정)은 로컬에서 직접 실행해서 확인함. 기존
+  `tests/test_code_graph_mapper.py`의 assert 6개를 전부 그대로 재현해서
+  수정 후에도 동일하게 통과하는 것도 확인함(회귀 없음).
+- **Flask 앱 컨텍스트가 필요한 테스트(`tests/test_chunk_import.py`,
+  `tests/test_code_graph_import.py`, `conftest.py`가 DB에 붙는 구조)는
+  이 환경에 Flask/SQLAlchemy 전체 스택이 없어서 못 돌려봄** — 로직상
+  동등하게 바꿨다고 판단했지만, **`pytest` 전체는 로컬에서 한 번 직접
+  돌려보고 머지할 것**.
+- Neo4j/pgvector 실제 연결한 end-to-end 임포트(`CodeGraphImportService`/
+  `ChunkImportService`를 대상 리포에 실제로 돌려보는 것)는 아직 안 함 —
+  다음 단계.
+
+**다음에 할 것:**
+1. `pytest` 로컬에서 전체 돌려서 초록불 확인
+2. 그래프 담당 팀원한테 `mappings.py`/`code_graph_import.py`/`chunk_import.py`
+   변경 내용 공유하고 리뷰받기
+3. ~~`pip install -e .` 재실행해서 의존성 설치 반영~~ — 완료, `재분석` 버튼으로
+   실 데이터 테스트까지 확인함(위 참고)
+4. ~~대상 리포의 실제 `.jsx` 파일로 실제 돌려서 확인~~ — **완료.** FE에서
+   PollCard 투표 흐름 질문 → PollList.handleVoteSubmit까지 정확히 추적하는
+   답변 받음(JS 그래프 노드가 실제로 쓰이고 있다는 뜻)
+5. ~~Python 파서~~ — **완료, 아래 0-10 참고**
+
+---
+
+## 0-10. Python + HTML 파서 추가 (2026-08-24, 이어서 완료)
+
+0-9에서 미룬 Python/HTML까지 마저 완료함. **여전히 커밋/푸시는 안 했음 —
+파일만 로컬 워킹 트리에 씀, 그래프 담당자 리뷰 필요한 것도 0-9와 동일.**
+
+**추가된 파일:**
+- `app/parsers/languages/python.py` (신규) — Python tree-sitter 파서. class +
+  모듈 최상위 함수(JS와 동일하게 `{파일이름}$module`로 감쌈) 지원.
+  `__init__`은 이름 규칙으로 생성자 판별. 데코레이터(`@app.route`,
+  `@staticmethod` 등)가 선언을 한 겹 감싸는 `decorated_definition` 노드
+  처리 추가됨(Java/JS엔 없던 Python 고유 케이스). 필드는 타입 힌트
+  (`x: Type`) + `__init__`의 `self.x = SomeClass()` 생성자 호출 패턴
+  best-effort 추론 둘 다로 뽑음(파이썬은 필드 타입 선언이 강제가 아니라서
+  후자 없인 리시버 타입 매칭이 거의 안 됨).
+- `app/parsers/languages/html.py` (신규) — HTML 자체는 별도 DTO 없이
+  `<script>` 태그 안 인라인 JS만 뽑아서 기존 `parse_javascript_file()`에
+  위임(그래프 매퍼도 `map_javascript_file` 그대로 재사용, 새 매퍼 안 만듦).
+  `src="..."`만 있고 본문 없는 스크립트 태그는 자동으로 건너뜀.
+- `app/graph/mappings.py` (수정) — `map_python_file` 추가(기존과 동일하게
+  `_map_file_document`에 위임, `language="python"`).
+- `app/parsers/registry.py` (수정) — `.py`/`.html` 확장자 등록.
+- `app/dtos/analysis.py` (수정) — `PythonFileResult`/`ClassResult`/
+  `MethodResult` 추가.
+- `pyproject.toml` (수정) — `tree-sitter-python`, `tree-sitter-html` 의존성
+  추가.
+- `tests/test_python_parser.py`, `test_html_parser.py` (신규) + 기존
+  `test_cross_language_mapping.py`/`test_parser_registry.py`에 Python/HTML
+  케이스 추가 — **총 22개 테스트 전부 로컬에서 통과 확인**(3-way 언어 충돌
+  테스트: Java/JS/Python이 전부 `save()`를 갖고 있어도 서로 안 섞이는 것까지
+  확인함).
+
+**주의할 점 (아직 못 검증한 것):**
+- Python은 대상 리포(폴링앱)에 실제 `.py` 파일이 없어서 합성 fixture로만
+  검증함 — 계획 문서에 원래 적어둔 그대로("Python은 target repo에 실 데이터
+  없으니 합성 fixture로 검증"). 실 데이터로 검증하려면 Python 코드가 있는
+  다른 리포로 재분석 돌려봐야 함.
+- HTML은 대상 리포에 `public/index.html` 정도만 있어서(React CRA 기본
+  템플릿, 인라인 스크립트 없음) 실질적으로 새로 잡히는 그래프 노드는 거의
+  없을 가능성 높음 — 계획에서부터 "실질 가치는 제일 낮다"고 적어뒀던 부분,
+  예상대로임.
+- Flask/DB 붙는 테스트는 여전히 이 환경에서 못 돌려봄(0-9와 동일한 한계) —
+  `pytest` 전체는 로컬에서 한 번 돌려보고 머지할 것.
+
+---
+
 ## 1. 지금 코드 상태 (이미 되어 있는 것 / 안 되어 있는 것)
 
 - **Phase 1(배관) 완료**: `app/ai/rag/state.py`(QAState 스키마), `app/ai/rag/pipeline.py`(`build_graph()`, `run_qa_pipeline()`) 둘 다 실제로 짜여 있고, `scripts/check_pipeline_skeleton.py`로 그래프 흐름(병렬 분기 → join → 조건부 재시도 루프)이 정상 동작함을 이미 검증함. **이 두 파일은 건드릴 필요 없음** — 그대로 재사용.
@@ -898,20 +1058,32 @@ def classify_question(state: QAState) -> dict:
 - ~~`ChatCompletionService`를 내가 만들지, response_composer 담당자가 만들지~~
   (2026-08-23 해결: LangChain 패턴으로 통일하기로 확정, 0-5 참고 — 더 이상
   협의 필요 없음)
-- **(0-4/0-5 — 내일 회의 안건, 0-7에서 실 데이터로 재현 확인함)** intent/impact
-  질문에서 `CHANGE_HISTORY`/`DEPENDENCY` 시각화 빌더가 아직 없어서
-  `visualization`이 항상 `None`으로 나옴 (`CallFlowBuilder`만 구현됨) — 누가
-  만들지 / 당장은 CALL_FLOW만 지원할지 확정 필요
+- ~~intent/impact 질문에서 `CHANGE_HISTORY`/`DEPENDENCY` 시각화 빌더가 아직
+  없어서 `visualization`이 항상 `None`으로 나옴~~ (2026-08-24 해결: `/chat` 연결
+  풀 받은 뒤 확인 — `QAResponseAdapter._graph_from()`이 `visualization`이
+  `None`이면 `state["graph_results"]`로 폴백해서 최소한의 그래프 데이터는
+  응답에 실림. 0-8 참고. 전용 빌더 자체는 여전히 CALL_FLOW만 있음, 폴백으로
+  당장 급한 불은 꺼진 상태)
 - **(신규, 0-7)** `changed_by_history` 그래프 쿼리가 찾는 `DELETED_IN` 관계가
   현재 Neo4j에 하나도 없음(경고만 뜨고 에러는 아님) — 그래프 담당자에게 의도된
   상태인지 확인 필요
-- **(0-4/0-5 — 내일 회의 안건, 0-7에서 코드 레벨로 확인함)**
-  `evidence_fusion.py`의 `state["evidence"]`가 `response_input_adapter.py`에서
-  전혀 안 읽힘 — `evidence_fusion.py` 자체를 없앨지, adapter가 evidence를
-  쓰도록 고칠지 결정 필요
-- **(신규, 0-4/0-5 — 내일 회의 안건)** 최종 응답 DTO(`QueryResponse`)에
-  구조화된 근거 목록이 빠진 것 — 프론트에 별도로 보여줄 계획이 있는지
-- 세션 ↔ 레포 매핑(`SessionCreateRequest.repo_id` → `github_repository_id`)이 아직 없어서, 지금은 `run_qa_pipeline()`을 테스트할 때 `github_repository_id`를 하드코딩해서 넘겨야 함 — 이건 `qa_service.py` 담당자(팀원 or 별도 담당) 몫이지만 내 노드들의 입력값이라 진행 상황 공유는 필요
+- ~~`evidence_fusion.py`의 `state["evidence"]`가 어디서도 안 읽힘~~ (2026-08-24
+  해결: 새로 생긴 `app/adapters/qa_response_adapter.py`(`QAResponseAdapter`)가
+  `state["evidence"]`를 읽어서 `ChatResponseData.evidence`/`confidence`/
+  `claims.evidenceIds`를 채움 — 더 이상 죽은 코드 아님. 0-8 참고)
+- ~~최종 응답 DTO(`QueryResponse`)에 구조화된 근거 목록이 빠진 것~~ (2026-08-24
+  해결: `QAResponseAdapter`가 `QueryResponse`(answer/intent/visualization)를
+  프론트용 `ChatResponseData`(summary/claims/evidence/confidence/graph/
+  uncertainties/suggestedQuestions)로 변환해서 채움 — `app/dtos/chat.py`
+  참고, 0-8 참고)
+- ~~세션 ↔ 레포 매핑이 아직 없어서...~~ (2026-08-23 rebase로 팀원이 `ChatSession`/`ChatMessage`
+  모델 + `app/api/v1/sessions.py`(세션 생성/조회) 구현해서 들어옴 — **단, 이 API의
+  `repo_id`는 `github_repository_id`(int)가 아니라 내부 Postgres `Repository.id`
+  (UUID)임.** 나중에 실제 "질문 보내기" API(`/chat`, 아직 mock)가 이 세션 위에
+  만들어질 때 `run_qa_pipeline()`에 넘길 `github_repository_id`를 얻으려면
+  `ChatSession.repository_id`(UUID)로 `Repository`를 한 번 더 조회해서
+  `github_repository_id`를 꺼내야 함 — 내 코드 변경 사항은 없음, `/chat` 담당자가
+  알아야 할 연결고리라 기록만 해둠
 - Neo4j client를 앱 전역 리소스로 등록할지(현재 `app/extensions.py`엔 없음) — 인프라 개선이라 별도 논의
 - ~~`CHANGED_BY` 엣지(Method↔Commit)는 그래프 담당자 별도 작업이었는데...~~
   (2026-08-22: 0-2 참고 — `HAS_VERSION`/`INTRODUCED_IN`/`DELETED_IN`으로 대체

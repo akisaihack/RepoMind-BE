@@ -1,9 +1,12 @@
-"""Parse Java sources from a local checkout, embed chunks, and persist to pgvector.
+"""Parse sources (Java/JavaScript/JSX) from a local checkout, embed chunks,
+and persist to pgvector.
 
 app/services/code_graph_import.py와 짝을 이루는 서비스 — 그래프 쪽이 Neo4j에
 Method/MethodVersion 노드를 저장한다면, 이 서비스는 같은 소스에서 뽑은 청크를
 임베딩해서 pgvector(code_chunks 테이블)에 저장함. graph_node_id가 동일한
 content hash 공식으로 계산되기 때문에 정확한 MethodVersion과 연결됨.
+
+지원 언어/확장자는 app/parsers/registry.py에 등록돼 있음.
 """
 
 from collections.abc import Callable, Iterable
@@ -11,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.dtos.chunk import CodeChunk
+from app.parsers.registry import discover_source_files, language_support_for
 from app.repositories.code_chunk import CodeChunkRepository
 from app.services.chunking import build_chunks_from_file
 from app.services.embedding import EmbeddingService
@@ -62,20 +66,21 @@ class ChunkImportService:
         if not commit_hash.strip():
             raise ValueError("commit_hash must not be empty.")
 
-        from app.parsers.languages.java import parse_java_file
-
-        java_files = sorted(repository_path.rglob("*.java"))
-        self._on_progress(f"parsing {len(java_files)} Java files...")
+        source_files = discover_source_files(repository_path)
+        self._on_progress(f"parsing {len(source_files)} source files...")
         chunks: list[CodeChunk] = []
-        for index, file_path in enumerate(java_files, start=1):
+        for index, file_path in enumerate(source_files, start=1):
+            support = language_support_for(file_path)
+            if support is None:
+                continue  # discover_source_files가 이미 걸러줌 — 방어적 스킵
             relative_path = file_path.relative_to(repository_path).as_posix()
             # CRLF -> LF 통일 (scripts/check_chunking.py와 동일한 이유).
             source_bytes = file_path.read_bytes().replace(b"\r\n", b"\n")
-            file_result = parse_java_file(relative_path, source_bytes)
+            file_result = support.parse(relative_path, source_bytes)
             file_chunks = build_chunks_from_file(github_repository_id, file_result, commit_hash)
             chunks.extend(file_chunks)
             self._on_progress(
-                f"[{index}/{len(java_files)}] {relative_path}: {len(file_chunks)} chunks"
+                f"[{index}/{len(source_files)}] {relative_path}: {len(file_chunks)} chunks"
             )
 
         existing_ids = self._chunk_repository.find_existing_graph_node_ids(
@@ -97,7 +102,7 @@ class ChunkImportService:
         return ChunkImportResult(
             github_repository_id=github_repository_id,
             commit_hash=commit_hash,
-            files=len(java_files),
+            files=len(source_files),
             chunks=len(chunks),
         )
 
