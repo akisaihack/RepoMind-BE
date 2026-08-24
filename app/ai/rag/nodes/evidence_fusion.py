@@ -18,6 +18,12 @@ _FULL_CODE_REQUEST_PATTERN = re.compile(
 )
 _QUERY_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 _MAX_EXCERPT_LINES = 30
+_MAX_EVIDENCE_BY_QUESTION_KIND = {
+    QuestionKind.FLOW: 5,
+    QuestionKind.IMPACT: 5,
+    QuestionKind.INTENT: 4,
+    QuestionKind.LOCATION: 5,
+}
 _QUESTION_KEYWORD_PATTERNS = {
     "login": re.compile(r"로그인|인증|토큰"),
     "request": re.compile(r"요청|엔드포인트|api|url|진입"),
@@ -57,7 +63,8 @@ def fuse_evidence(state: QAState) -> dict:
     if question_kind is QuestionKind.INTENT:
         evidence.extend(_history_evidence(graph_nodes, state["question"]))
 
-    return {"evidence": _deduplicate(evidence)}
+    deduplicated = _deduplicate(evidence)
+    return {"evidence": deduplicated[:_MAX_EVIDENCE_BY_QUESTION_KIND[question_kind]]}
 
 
 def _is_user_evidence_candidate(
@@ -173,7 +180,9 @@ def _commit_evidence(node: dict, metadata: Mapping) -> dict | None:
     if not isinstance(sha, str) or not sha:
         return None
     message = metadata.get("message")
-    title = message if isinstance(message, str) and message else f"커밋 {sha[:8]}"
+    if not isinstance(message, str) or not message.strip():
+        return None
+    title = message.strip()
     details = [metadata.get("author"), metadata.get("committed_at")]
     description = " · ".join(value for value in details if isinstance(value, str) and value)
     return {

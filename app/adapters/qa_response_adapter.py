@@ -66,6 +66,7 @@ class QAResponseAdapter:
 
 
 def _claims_from(query_response: QueryResponse, evidence: list[Evidence]) -> list[Claim]:
+    evidence_ids = {item.id for item in evidence}
     if query_response.claims:
         return [
             Claim(
@@ -73,7 +74,7 @@ def _claims_from(query_response: QueryResponse, evidence: list[Evidence]) -> lis
                 kind=claim.kind,
                 title=claim.title,
                 content=claim.content,
-                evidenceIds=claim.evidence_ids,
+                evidenceIds=[item_id for item_id in claim.evidence_ids if item_id in evidence_ids],
             )
             for claim in query_response.claims
         ]

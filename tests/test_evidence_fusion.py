@@ -279,3 +279,42 @@ def test_uses_korean_question_intent_to_find_a_relevant_code_statement() -> None
     assert "repository.upsert(record)" in evidence["excerpt"]
     assert evidence["hasMoreBefore"]
     assert evidence["hasMoreAfter"]
+
+
+def test_limits_default_flow_evidence_to_five_items() -> None:
+    hits = [_hit(f"method{index}") for index in range(6)]
+    state = {
+        "question": "호출 흐름",
+        "github_repository_id": 1,
+        "question_kind": "flow",
+        "vector_results": hits,
+        "selected_target": {"graph_node_id": hits[0]["graph_node_id"]},
+        "graph_results": {
+            "nodes": [{"id": hit["graph_node_id"]} for hit in hits],
+            "edges": [],
+        },
+    }
+
+    evidence = fuse_evidence(state)["evidence"]
+
+    assert len(evidence) == 5
+
+
+def test_excludes_commit_without_a_message() -> None:
+    state = {
+        "question": "변경 이력",
+        "github_repository_id": 1,
+        "question_kind": "intent",
+        "vector_results": [],
+        "graph_results": {
+            "nodes": [
+                {
+                    "id": "commit:empty",
+                    "metadata": {"node_type": "Commit", "sha": "abc123"},
+                }
+            ],
+            "edges": [],
+        },
+    }
+
+    assert fuse_evidence(state)["evidence"] == []

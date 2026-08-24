@@ -112,6 +112,40 @@ def test_uses_llm_generated_claims_without_copying_summary() -> None:
     assert result.uncertainties == ["필터 등록 순서는 제공된 근거로 확인할 수 없습니다."]
 
 
+def test_drops_claim_evidence_ids_not_in_the_public_evidence_list() -> None:
+    response = QueryResponse(
+        answer="답변",
+        intent=QueryIntent.EXPLANATION,
+        claims=[
+            GeneratedClaim(
+                id="claim-1",
+                kind="fact",
+                title="검증된 주장",
+                content="검증된 코드만 설명합니다.",
+                evidenceIds=["evidence:known", "evidence:unknown"],
+            )
+        ],
+    )
+    state = {
+        "question": "어디야?",
+        "github_repository_id": 1,
+        "evidence": [
+            {
+                "id": "evidence:known",
+                "type": "code",
+                "title": "Known.method()",
+                "location": "Known.java · Line 1",
+                "description": "확인된 근거",
+            }
+        ],
+        "graph_results": {"nodes": [], "edges": []},
+    }
+
+    result = QAResponseAdapter().adapt(state, response)
+
+    assert result.claims[0].evidenceIds == ["evidence:known"]
+
+
 def test_falls_back_to_retrieval_graph_when_no_visualization_is_available() -> None:
     state = {
         "question": "로그인 처리는 어디에 있어?",
