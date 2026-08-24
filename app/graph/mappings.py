@@ -33,6 +33,7 @@ from app.dtos.analysis import (
     JavaMethodResult,
     JavaScriptFileResult,
     PythonFileResult,
+    TypeScriptFileResult,
 )
 from app.dtos.graph import GraphDocument, GraphEdge, GraphNode
 from app.dtos.protocols import ClassResultProtocol, FileResultProtocol, MethodResultProtocol
@@ -423,6 +424,22 @@ def map_javascript_file(
     """
     return _map_file_document(
         github_repository_id, file_result, commit_hash, language="javascript"
+    )
+
+
+def map_typescript_file(
+    github_repository_id: int,
+    file_result: TypeScriptFileResult,
+    commit_hash: str,
+) -> GraphDocument:
+    """TS/TSX 파일 파싱 결과 하나를 GraphDocument(노드+엣지)로 변환.
+
+    map_javascript_file과 동일하게 _map_file_document()에 위임
+    (language="typescript") — Class/Interface/Method 노드 생성, EXTENDS/
+    IMPLEMENTS/CALLS 엣지 배선 규칙 전부 동일하게 적용됨.
+    """
+    return _map_file_document(
+        github_repository_id, file_result, commit_hash, language="typescript"
     )
 
 
