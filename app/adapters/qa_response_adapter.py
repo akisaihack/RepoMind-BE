@@ -97,6 +97,13 @@ def _evidence_from(raw_evidence: object) -> list[Evidence]:
                 location=_string_or_empty(raw_item.get("location")),
                 description=_string_or_empty(raw_item.get("description")),
                 excerpt=_optional_string(raw_item.get("excerpt")),
+                fullExcerpt=_optional_string(raw_item.get("fullExcerpt")),
+                startLine=_optional_int(raw_item.get("startLine")),
+                endLine=_optional_int(raw_item.get("endLine")),
+                excerptStartLine=_optional_int(raw_item.get("excerptStartLine")),
+                excerptEndLine=_optional_int(raw_item.get("excerptEndLine")),
+                hasMoreBefore=raw_item.get("hasMoreBefore") is True,
+                hasMoreAfter=raw_item.get("hasMoreAfter") is True,
             )
         )
     return evidence
@@ -176,6 +183,10 @@ def _string_or_empty(value: object) -> str:
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 __all__ = ["QAResponseAdapter"]

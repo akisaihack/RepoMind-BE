@@ -54,6 +54,13 @@ class Evidence:
     location: str
     description: str
     excerpt: str | None = None
+    fullExcerpt: str | None = None
+    startLine: int | None = None
+    endLine: int | None = None
+    excerptStartLine: int | None = None
+    excerptEndLine: int | None = None
+    hasMoreBefore: bool = False
+    hasMoreAfter: bool = False
 
 
 @dataclass

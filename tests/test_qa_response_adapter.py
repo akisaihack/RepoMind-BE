@@ -34,6 +34,13 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
                 "location": "CancelController.java:20",
                 "description": "취소 요청을 서비스에 전달합니다.",
                 "excerpt": "cancelService.cancel();",
+                "fullExcerpt": "def cancel():\n    cancelService.cancel();",
+                "startLine": 20,
+                "endLine": 52,
+                "excerptStartLine": 31,
+                "excerptEndLine": 45,
+                "hasMoreBefore": True,
+                "hasMoreAfter": True,
             },
             {
                 "id": "method:2",
@@ -59,6 +66,9 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
 
     serialized = asdict(result)
     assert serialized["claims"][0]["evidenceIds"] == ["method:1", "method:2"]
+    assert serialized["evidence"][0]["excerptStartLine"] == 31
+    assert serialized["evidence"][0]["fullExcerpt"].startswith("def cancel")
+    assert serialized["evidence"][0]["hasMoreAfter"] is True
     assert serialized["suggestedQuestions"] == ["이 흐름을 수정하면 영향 범위가 어떻게 돼?"]
 
 
