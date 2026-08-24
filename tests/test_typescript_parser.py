@@ -126,3 +126,15 @@ def test_file_with_no_classes_interfaces_or_functions_returns_empty_result():
     result = parse_typescript_file("empty.ts", b"// just a comment\n")
     assert result.classes == ()
     assert result.imports == ()
+
+
+def test_extracts_static_axios_call() -> None:
+    src = b'''\
+    export const login = () => axios.post("/api/auth/login", { email: "a" });
+    '''
+    result = parse_typescript_file("api/auth.ts", src)
+    method = result.classes[0].methods[0]
+
+    assert [(call.http_method, call.path) for call in method.http_calls] == [
+        ("POST", "/api/auth/login")
+    ]

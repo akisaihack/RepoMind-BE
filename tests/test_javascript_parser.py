@@ -90,3 +90,19 @@ def test_arrow_function_assigned_to_const_is_treated_as_top_level_function():
     method_names = {m.name for m in module_class.methods}
     assert "formatDate" in method_names
     assert module_class.layer == "Util"  # utils/ 경로 키워드로 분류됨
+
+
+def test_extracts_static_fetch_and_axios_calls() -> None:
+    src = b'''\
+    export async function checkUsername(value) {
+        await axios.get("/api/user/checkUsername", { params: { value } });
+        return fetch("/api/session", { method: "POST" });
+    }
+    '''
+    result = parse_javascript_file("api/user.js", src)
+    method = result.classes[0].methods[0]
+
+    assert {(call.http_method, call.path) for call in method.http_calls} == {
+        ("GET", "/api/user/checkUsername"),
+        ("POST", "/api/session"),
+    }

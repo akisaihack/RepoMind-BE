@@ -28,9 +28,7 @@ app/graph/repositories/에 있음. 이 모듈은 "파싱 결과를 어떤 노드
 from collections.abc import Iterable
 
 from app.dtos.analysis import (
-    JavaClassResult,
     JavaFileResult,
-    JavaMethodResult,
     JavaScriptFileResult,
     PythonFileResult,
     TypeScriptFileResult,
@@ -237,6 +235,24 @@ def _build_calls_edges(
     return edges
 
 
+def _build_http_calls_edges(method_id: str, method_result: MethodResultProtocol) -> list[GraphEdge]:
+    """정적으로 확인된 프론트 HTTP 요청을 Endpoint와 연결할 후보로 남긴다."""
+    return [
+        GraphEdge(
+            type="HTTP_CALLS",
+            source=method_id,
+            target=f"{call.http_method}:{call.path}",
+            properties={
+                "resolved": False,
+                "http_method": call.http_method,
+                "path": call.path,
+            },
+        )
+        for call in getattr(method_result, "http_calls", ())
+        if call.path.startswith("/")
+    ]
+
+
 def _build_exposes_edge(method_id: str, endpoint_id: str) -> GraphEdge:
     return GraphEdge(type="EXPOSES", source=method_id, target=endpoint_id, properties={})
 
@@ -383,6 +399,7 @@ def _map_file_document(
                 )
             )
             edges.extend(_build_calls_edges(version_id, method_result, class_result))
+            edges.extend(_build_http_calls_edges(version_id, method_result))
 
             if method_result.api_mapping:
                 http_method = method_result.api_mapping.http_method
@@ -485,6 +502,7 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
     classes_by_name: dict[tuple[str, str], list[str]] = {}
     classes_by_fqn: dict[tuple[str, str], list[str]] = {}
     method_class_names: dict[str, set[str]] = {}
+    endpoints_by_route: dict[str, list[str]] = {}
     node_language: dict[str, str] = {}
     for node in all_nodes:
         name = node.properties.get("name")
@@ -504,6 +522,11 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
                 if value
             }
             method_class_names[node.id] = class_names
+        elif node.type == "Endpoint":
+            http_method = node.properties.get("http_method")
+            path = node.properties.get("path")
+            if isinstance(http_method, str) and isinstance(path, str):
+                endpoints_by_route.setdefault(f"{http_method}:{path}", []).append(node.id)
         if not name:
             continue
         if node.type == "Method":
@@ -538,6 +561,8 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
                 ]
                 if narrowed:
                     candidates = narrowed
+        elif edge.type == "HTTP_CALLS":
+            candidates = endpoints_by_route.get(edge.target, [])
         elif edge.type == "IMPORTS":
             simple_name = edge.target.rsplit(".", 1)[-1]
             candidates = classes_by_fqn.get(

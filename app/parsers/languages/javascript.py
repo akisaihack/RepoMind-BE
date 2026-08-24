@@ -14,11 +14,14 @@ CALLS 관계는 이름(+가능하면 리시버)만 뽑아서 반환하고, 실�
 처리함(Java와 동일).
 """
 
+import re
+
 import tree_sitter_javascript as tsjavascript
 from tree_sitter import Language, Node
 
 from app.dtos.analysis import (
     FieldResult,
+    HttpCall,
     JavaScriptClassResult,
     JavaScriptFileResult,
     JavaScriptMethodResult,
@@ -41,6 +44,14 @@ _TOP_LEVEL_FUNCTION_VALUE_TYPES = {"arrow_function", "function_expression"}
 # 최상위 orphan 함수를 담는 합성 클래스 이름 접미사. 실제 클래스와 겹치지
 # 않도록 파일 안에서 절대 안 쓰일 접미사를 붙임.
 _MODULE_CLASS_SUFFIX = "$module"
+_HTTP_METHODS = "get|post|put|patch|delete|head|options"
+_HTTP_CALL_PATTERN = re.compile(
+    rf"(?:axios|http|api)\.({ _HTTP_METHODS })\(\s*['\"](?P<path>[^'\"`]+)['\"]",
+    re.IGNORECASE,
+)
+_FETCH_CALL_PATTERN = re.compile(
+    r"fetch\(\s*['\"](?P<path>[^'\"`]+)['\"](?P<options>[^)]*)\)", re.IGNORECASE
+)
 
 # React 컴포넌트/훅 관례에 기반한 최선-노력(best-effort) 레이어 분류.
 # Java의 classify_layer만큼 정교하지 않음 — 이름 규칙 + 경로 키워드만 봄.
@@ -315,6 +326,27 @@ def _extract_invoked_names(body_node: Node, source_bytes: bytes) -> list[MethodC
     return calls
 
 
+def _extract_http_calls(body_node: Node, source_bytes: bytes) -> list[HttpCall]:
+    source = get_node_text(body_node, source_bytes)
+    calls = [
+        HttpCall(http_method=match.group(1).upper(), path=match.group("path"))
+        for match in _HTTP_CALL_PATTERN.finditer(source)
+    ]
+    for match in _FETCH_CALL_PATTERN.finditer(source):
+        method_match = re.search(
+            r"method\s*:\s*['\"](?P<method>GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)['\"]",
+            match.group("options"),
+            re.IGNORECASE,
+        )
+        calls.append(
+            HttpCall(
+                http_method=method_match.group("method").upper() if method_match else "GET",
+                path=match.group("path"),
+            )
+        )
+    return calls
+
+
 def _method_result_from_node(
     node: Node,
     source_bytes: bytes,
@@ -343,6 +375,7 @@ def _method_result_from_node(
 
     body_node = get_child_by_field(node, "body")
     invoked_calls = _extract_invoked_names(body_node, source_bytes) if body_node is not None else []
+    http_calls = _extract_http_calls(body_node, source_bytes) if body_node is not None else []
 
     return JavaScriptMethodResult(
         name=name,
@@ -353,4 +386,5 @@ def _method_result_from_node(
         text=get_node_text(range_node, source_bytes),
         api_mapping=None,  # Express 라우트 매핑은 이번 범위에서 제외 (플랜 참고)
         invoked_calls=tuple(invoked_calls),
+        http_calls=tuple(http_calls),
     )

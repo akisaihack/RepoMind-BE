@@ -75,7 +75,8 @@ def calls_forward(
 ) -> dict:
     """flow: CALLS(+HAS_VERSION으로 버전<->메서드 건너뛰기)를 depth까지 순방향 탐색."""
     query = f"""
-    MATCH path = (start {{key: $start_node_id}})-[:CALLS|HAS_VERSION*1..{depth * 2}]->(end)
+    MATCH path =
+      (start {{key: $start_node_id}})-[:CALLS|HTTP_CALLS|HAS_VERSION*1..{depth * 2}]->(end)
     OPTIONAL MATCH endpoint_path =
       (:Endpoint)<-[:EXPOSES]-(:Method)-[:HAS_VERSION]->(start)
     RETURN path, endpoint_path
