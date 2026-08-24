@@ -135,6 +135,7 @@ def _graph_from(state: QAState, response: QueryResponse) -> GraphData:
         return GraphData(
             nodes=[_graph_node_from(node.model_dump()) for node in response.visualization.nodes],
             edges=[_graph_edge_from(edge.model_dump()) for edge in response.visualization.edges],
+            kind=_graph_kind(response.intent),
         )
 
     graph_results = state.get("graph_results", {}) or {}
@@ -143,7 +144,17 @@ def _graph_from(state: QAState, response: QueryResponse) -> GraphData:
     return GraphData(
         nodes=[_graph_node_from(node) for node in raw_nodes if isinstance(node, Mapping)],
         edges=[_graph_edge_from(edge) for edge in raw_edges if isinstance(edge, Mapping)],
+        kind=_graph_kind(response.intent),
     )
+
+
+def _graph_kind(intent: QueryIntent) -> Literal["flow", "impact", "history", "relationship"]:
+    return {
+        QueryIntent.FLOW: "flow",
+        QueryIntent.DEPENDENCY: "impact",
+        QueryIntent.HISTORY: "history",
+        QueryIntent.EXPLANATION: "relationship",
+    }[intent]
 
 
 def _graph_node_from(raw_node: Mapping[str, Any]) -> GraphNode:

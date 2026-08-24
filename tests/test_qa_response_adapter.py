@@ -63,6 +63,7 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
     assert result.confidence.level == "high"
     assert result.uncertainties == []
     assert result.graph.nodes[0].type == "symbol"
+    assert result.graph.kind == "flow"
     assert result.suggestedQuestions == ["이 흐름을 수정하면 영향 범위가 어떻게 돼?"]
 
     serialized = asdict(result)
@@ -188,6 +189,7 @@ def test_falls_back_to_retrieval_graph_when_no_visualization_is_available() -> N
 
     assert [node.type for node in result.graph.nodes] == ["symbol", "commit"]
     assert result.graph.edges[0].type == "introduced_in"
+    assert result.graph.kind == "relationship"
     assert result.graph.edges[0].label == "introduced_in"
     assert result.confidence.level == "medium"
 

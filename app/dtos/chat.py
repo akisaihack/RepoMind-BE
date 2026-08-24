@@ -44,6 +44,7 @@ class GraphEdge:
 class GraphData:
     nodes: list[GraphNode] = field(default_factory=list)
     edges: list[GraphEdge] = field(default_factory=list)
+    kind: Literal["flow", "impact", "history", "relationship"] | None = None
 
 
 @dataclass
