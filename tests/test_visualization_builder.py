@@ -55,3 +55,54 @@ def test_unsupported_visualization_is_none() -> None:
     )
 
     assert VisualizationBuilder().build(input_data) is None
+
+
+def test_call_flow_projects_versions_and_drops_internal_or_isolated_nodes() -> None:
+    controller = {"id": "method:controller", "name": "UserController.login", "type": "SYMBOL"}
+    controller_version = {"id": "version:controller", "name": "코드 버전", "type": "SYMBOL"}
+    service = {"id": "method:service", "name": "AuthService.login", "type": "SYMBOL"}
+    endpoint = {"id": "api:login", "name": "POST /api/login", "type": "API"}
+    commit = {"id": "commit:1", "name": "commit", "type": "COMMIT"}
+    input_data = ResponseGenerationInput(
+        question="로그인 흐름",
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(
+            graph=[
+                {"source": controller, "relation": "HAS_VERSION", "target": controller_version},
+                {"source": controller_version, "relation": "CALLS", "target": service},
+                {"source": controller, "relation": "EXPOSES", "target": endpoint},
+                {"source": controller_version, "relation": "INTRODUCED_IN", "target": commit},
+            ]
+        ),
+    )
+
+    result = VisualizationBuilder().build(input_data)
+
+    assert result is not None
+    assert [node.id for node in result.nodes] == [
+        "method:controller",
+        "method:service",
+        "api:login",
+    ]
+    assert [(edge.source, edge.type, edge.target) for edge in result.edges] == [
+        ("api:login", "HANDLED_BY", "method:controller"),
+        ("method:controller", "CALLS", "method:service"),
+    ]
+
+
+def test_call_flow_is_none_without_a_call_relation() -> None:
+    method = {"id": "method:controller", "name": "UserController.login", "type": "SYMBOL"}
+    endpoint = {"id": "api:login", "name": "POST /api/login", "type": "API"}
+    input_data = ResponseGenerationInput(
+        question="로그인 흐름",
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(
+            graph=[{"source": method, "relation": "EXPOSES", "target": endpoint}]
+        ),
+    )
+
+    assert VisualizationBuilder().build(input_data) is None
