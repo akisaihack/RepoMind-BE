@@ -42,8 +42,15 @@ class GraphEdge:
 
 @dataclass
 class GraphData:
+    """Public graph contract.
+
+    ``kind == 'flow'`` exposes only ``calls``, ``http_calls``, and ``handled_by``
+    edges. Every node must be an endpoint or a method connected to one of them.
+    """
+
     nodes: list[GraphNode] = field(default_factory=list)
     edges: list[GraphEdge] = field(default_factory=list)
+    kind: Literal["flow", "impact", "history", "relationship"] | None = None
 
 
 @dataclass
@@ -54,6 +61,13 @@ class Evidence:
     location: str
     description: str
     excerpt: str | None = None
+    fullExcerpt: str | None = None
+    startLine: int | None = None
+    endLine: int | None = None
+    excerptStartLine: int | None = None
+    excerptEndLine: int | None = None
+    hasMoreBefore: bool = False
+    hasMoreAfter: bool = False
 
 
 @dataclass
@@ -61,6 +75,15 @@ class Claim:
     id: str
     kind: Literal["fact", "stated_intent", "inference"]
     title: str
+    content: str
+    evidenceIds: list[str]
+    citations: list["ClaimCitation"] = field(default_factory=list)
+
+
+@dataclass
+class ClaimCitation:
+    """근거 배지를 붙일 하나의 답변 문단 또는 목록 항목."""
+
     content: str
     evidenceIds: list[str]
 

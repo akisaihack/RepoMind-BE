@@ -1,5 +1,8 @@
 """Deterministic visualization builder tests."""
 
+import json
+from pathlib import Path
+
 from app.dtos.response_generation import (
     QueryIntent,
     ResponseGenerationInput,
@@ -55,3 +58,194 @@ def test_unsupported_visualization_is_none() -> None:
     )
 
     assert VisualizationBuilder().build(input_data) is None
+
+
+def test_call_flow_projects_versions_and_drops_internal_or_isolated_nodes() -> None:
+    controller = {"id": "method:controller", "name": "UserController.login", "type": "SYMBOL"}
+    controller_version = {"id": "version:controller", "name": "코드 버전", "type": "SYMBOL"}
+    service = {"id": "method:service", "name": "AuthService.login", "type": "SYMBOL"}
+    endpoint = {"id": "api:login", "name": "POST /api/login", "type": "API"}
+    commit = {"id": "commit:1", "name": "commit", "type": "COMMIT"}
+    input_data = ResponseGenerationInput(
+        question="로그인 흐름",
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(
+            graph=[
+                {"source": controller, "relation": "HAS_VERSION", "target": controller_version},
+                {"source": controller_version, "relation": "CALLS", "target": service},
+                {"source": controller, "relation": "EXPOSES", "target": endpoint},
+                {"source": controller_version, "relation": "INTRODUCED_IN", "target": commit},
+            ]
+        ),
+    )
+
+    result = VisualizationBuilder().build(input_data)
+
+    assert result is not None
+    assert [node.id for node in result.nodes] == [
+        "method:controller",
+        "method:service",
+        "api:login",
+    ]
+    assert [(edge.source, edge.type, edge.target) for edge in result.edges] == [
+        ("api:login", "HANDLED_BY", "method:controller"),
+        ("method:controller", "CALLS", "method:service"),
+    ]
+
+
+def test_call_flow_is_none_without_a_call_relation() -> None:
+    method = {"id": "method:controller", "name": "UserController.login", "type": "SYMBOL"}
+    endpoint = {"id": "api:login", "name": "POST /api/login", "type": "API"}
+    input_data = ResponseGenerationInput(
+        question="로그인 흐름",
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(
+            graph=[{"source": method, "relation": "EXPOSES", "target": endpoint}]
+        ),
+    )
+
+    assert VisualizationBuilder().build(input_data) is None
+
+
+def test_call_flow_connects_frontend_http_request_to_controller_and_service() -> None:
+    frontend = {"id": "method:frontend", "name": "Signup.validateUsername", "type": "SYMBOL"}
+    frontend_version = {"id": "version:frontend", "name": "코드 버전", "type": "SYMBOL"}
+    endpoint = {"id": "api:username", "name": "GET /api/user/checkUsername", "type": "API"}
+    controller = {
+        "id": "method:controller",
+        "name": "UserController.checkUsername(String)",
+        "type": "SYMBOL",
+    }
+    controller_version = {"id": "version:controller", "name": "코드 버전", "type": "SYMBOL"}
+    repository = {
+        "id": "method:repository",
+        "name": "UserRepository.existsByUsername(String)",
+        "type": "SYMBOL",
+    }
+    graph = [
+        {"source": frontend, "relation": "HAS_VERSION", "target": frontend_version},
+        {"source": frontend_version, "relation": "HTTP_CALLS", "target": endpoint},
+        {"source": controller, "relation": "EXPOSES", "target": endpoint},
+        {"source": controller, "relation": "HAS_VERSION", "target": controller_version},
+        {"source": controller_version, "relation": "CALLS", "target": repository},
+        {
+            "source": {"id": "commit:1", "name": "commit", "type": "COMMIT"},
+            "relation": "INTRODUCED_IN",
+            "target": frontend_version,
+        },
+    ]
+    input_data = ResponseGenerationInput(
+        question="사용자명 확인 흐름",
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(graph=graph),
+    )
+
+    result = VisualizationBuilder().build(input_data)
+
+    assert result is not None
+    assert {(edge.source, edge.type, edge.target) for edge in result.edges} == {
+        ("method:frontend", "HTTP_CALLS", "api:username"),
+        ("api:username", "HANDLED_BY", "method:controller"),
+        ("method:controller", "CALLS", "method:repository"),
+    }
+    connected_ids = {node_id for edge in result.edges for node_id in (edge.source, edge.target)}
+    assert {node.id for node in result.nodes} == connected_ids
+
+
+def test_username_flow_fixture_excludes_history_and_internal_graph_nodes() -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "flow_username_check.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    input_data = ResponseGenerationInput(
+        question=fixture["question"],
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(graph=fixture["graph"]),
+    )
+
+    result = VisualizationBuilder().build(input_data)
+
+    assert result is not None
+    assert {edge.type for edge in result.edges} <= {"CALLS", "HTTP_CALLS", "HANDLED_BY"}
+    connected_ids = {node_id for edge in result.edges for node_id in (edge.source, edge.target)}
+    assert {node.id for node in result.nodes} == connected_ids
+    assert not {node.id for node in result.nodes} & {
+        "commit:username",
+        "class:controller",
+        "version:frontend",
+        "version:controller",
+    }
+
+
+def test_call_flow_keeps_jwt_path_and_prunes_accessor_fan_out() -> None:
+    root = {
+        "id": "method:filter",
+        "name": "JwtAuthenticationFilter.doFilterInternal",
+        "type": "SYMBOL",
+    }
+    root_version = {"id": "version:filter", "name": "코드 버전", "type": "SYMBOL"}
+    validate = {
+        "id": "method:validate",
+        "name": "JwtTokenProvider.validateToken",
+        "type": "SYMBOL",
+    }
+    jwt = {
+        "id": "method:jwt",
+        "name": "JwtAuthenticationFilter.getJwtFromRequest",
+        "type": "SYMBOL",
+    }
+    user_id = {
+        "id": "method:user-id",
+        "name": "JwtTokenProvider.getUserIdFromJWT",
+        "type": "SYMBOL",
+    }
+    load = {
+        "id": "method:load",
+        "name": "CustomUserDetailsService.loadUserById",
+        "type": "SYMBOL",
+    }
+    find = {"id": "method:find", "name": "UserRepository.findById", "type": "SYMBOL"}
+    create = {"id": "method:create", "name": "UserPrincipal.create", "type": "SYMBOL"}
+    getters = [
+        {"id": f"method:get-{index}", "name": f"User.getField{index}", "type": "SYMBOL"}
+        for index in range(20)
+    ]
+    relations = [
+        {"source": root, "relation": "HAS_VERSION", "target": root_version},
+        *[
+            {"source": root_version, "relation": "CALLS", "target": target}
+            for target in [validate, jwt, user_id, load]
+        ],
+        {"source": load, "relation": "CALLS", "target": find},
+        {"source": load, "relation": "CALLS", "target": create},
+        *[{"source": create, "relation": "CALLS", "target": getter} for getter in getters],
+    ]
+    input_data = ResponseGenerationInput(
+        question="JWT 검증 과정 흐름",
+        target="JwtAuthenticationFilter.doFilterInternal",
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(graph=relations),
+    )
+
+    result = VisualizationBuilder().build(input_data)
+
+    assert result is not None
+    assert {node.id for node in result.nodes} == {
+        "method:filter",
+        "method:validate",
+        "method:jwt",
+        "method:user-id",
+        "method:load",
+        "method:find",
+        "method:create",
+    }
+    assert all(".getField" not in node.label for node in result.nodes)
+    assert all("version:filter" not in node.id for node in result.nodes)

@@ -45,6 +45,7 @@ class VectorHit(TypedDict):
     path: str
     class_name: str | None
     method_name: str | None
+    param_signature: str | None
     start_line: int
     end_line: int
     api_http_method: str | None

@@ -114,6 +114,9 @@ def _chunk_to_result(chunk) -> dict:
         "path": chunk.path,
         "class_name": chunk.class_name,
         "method_name": chunk.method_name,
+        # Historical chunk rows created before signature extraction do not
+        # have this column populated. Keep them usable as evidence.
+        "param_signature": getattr(chunk, "param_signature", ""),
         "start_line": chunk.start_line,
         "end_line": chunk.end_line,
         "api_http_method": chunk.api_http_method,

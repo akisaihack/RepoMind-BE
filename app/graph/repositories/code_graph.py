@@ -18,6 +18,7 @@ ALLOWED_RELATIONSHIP_TYPES = frozenset(
         "DECLARES",
         "CONTAINS",
         "CALLS",
+        "HTTP_CALLS",
         "HAS_VERSION",
         "INTRODUCED_IN",
         "DELETED_IN",

@@ -25,12 +25,12 @@ app/graph/repositories/에 있음. 이 모듈은 "파싱 결과를 어떤 노드
   등) 원래 이름을 target으로 남겨두고 `external=True`로 표시함.
 """
 
+import re
 from collections.abc import Iterable
+from urllib.parse import urlsplit
 
 from app.dtos.analysis import (
-    JavaClassResult,
     JavaFileResult,
-    JavaMethodResult,
     JavaScriptFileResult,
     PythonFileResult,
     TypeScriptFileResult,
@@ -237,6 +237,41 @@ def _build_calls_edges(
     return edges
 
 
+def _build_http_calls_edges(method_id: str, method_result: MethodResultProtocol) -> list[GraphEdge]:
+    """정적으로 확인된 프론트 HTTP 요청을 Endpoint와 연결할 후보로 남긴다."""
+    edges: list[GraphEdge] = []
+    for call in getattr(method_result, "http_calls", ()):
+        path = _normalize_http_path(call.path)
+        if path is None:
+            continue
+        edges.append(
+            GraphEdge(
+                type="HTTP_CALLS",
+                source=method_id,
+                target=f"{call.http_method.upper()}:{path}",
+                properties={
+                    "resolved": False,
+                    "http_method": call.http_method.upper(),
+                    "path": path,
+                },
+            )
+        )
+    return edges
+
+
+def _normalize_http_path(value: str) -> str | None:
+    """Normalize static client URLs and Spring route templates to one route key.
+
+    The graph only resolves statically known paths. Dynamic template strings stay
+    unresolved instead of guessing a target endpoint.
+    """
+    path = urlsplit(value).path if "://" in value else value
+    if not path.startswith("/") or "${" in path:
+        return None
+    normalized = path.rstrip("/") or "/"
+    return re.sub(r"/(?:\{[^/]+\}|:[^/]+)", "/:param", normalized)
+
+
 def _build_exposes_edge(method_id: str, endpoint_id: str) -> GraphEdge:
     return GraphEdge(type="EXPOSES", source=method_id, target=endpoint_id, properties={})
 
@@ -383,6 +418,7 @@ def _map_file_document(
                 )
             )
             edges.extend(_build_calls_edges(version_id, method_result, class_result))
+            edges.extend(_build_http_calls_edges(version_id, method_result))
 
             if method_result.api_mapping:
                 http_method = method_result.api_mapping.http_method
@@ -485,6 +521,7 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
     classes_by_name: dict[tuple[str, str], list[str]] = {}
     classes_by_fqn: dict[tuple[str, str], list[str]] = {}
     method_class_names: dict[str, set[str]] = {}
+    endpoints_by_route: dict[str, list[str]] = {}
     node_language: dict[str, str] = {}
     for node in all_nodes:
         name = node.properties.get("name")
@@ -504,6 +541,15 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
                 if value
             }
             method_class_names[node.id] = class_names
+        elif node.type == "Endpoint":
+            http_method = node.properties.get("http_method")
+            path = node.properties.get("path")
+            if isinstance(http_method, str) and isinstance(path, str):
+                normalized_path = _normalize_http_path(path)
+                if normalized_path is not None:
+                    endpoints_by_route.setdefault(
+                        f"{http_method.upper()}:{normalized_path}", []
+                    ).append(node.id)
         if not name:
             continue
         if node.type == "Method":
@@ -538,6 +584,8 @@ def resolve_cross_file_references(documents: Iterable[GraphDocument]) -> GraphDo
                 ]
                 if narrowed:
                     candidates = narrowed
+        elif edge.type == "HTTP_CALLS":
+            candidates = endpoints_by_route.get(edge.target, [])
         elif edge.type == "IMPORTS":
             simple_name = edge.target.rsplit(".", 1)[-1]
             candidates = classes_by_fqn.get(

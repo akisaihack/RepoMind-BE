@@ -11,6 +11,33 @@ _METHOD_KEY_PATTERN = re.compile(
     r"^\d+:(?:class|interface):(?P<path>.+?\.java):(?P<owner>[^:]+):"
     r"(?:method|constructor):(?P<method>[^:]+):(?P<signature>\(.*\))$"
 )
+_EMBEDDING_METADATA_PREFIXES = ("// package:", "// class:", "// method:")
+_FULL_CODE_REQUEST_PATTERN = re.compile(
+    r"(?:전체\s*(?:코드|구현|메서드)|메서드\s*전체|원문|full(?:\s+\w+){0,3}\s+(?:code|method))",
+    re.IGNORECASE,
+)
+_QUERY_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+_MAX_EXCERPT_LINES = 30
+_MAX_EVIDENCE_BY_QUESTION_KIND = {
+    QuestionKind.FLOW: 5,
+    QuestionKind.IMPACT: 5,
+    QuestionKind.INTENT: 4,
+    QuestionKind.LOCATION: 5,
+}
+_QUESTION_KEYWORD_PATTERNS = {
+    "login": re.compile(r"로그인|인증|토큰"),
+    "request": re.compile(r"요청|엔드포인트|api|url|진입"),
+    "save": re.compile(r"저장|등록|생성|업데이트|삭제"),
+    "analysis": re.compile(r"분석|파싱|청킹|임베딩"),
+    "condition": re.compile(r"조건|검증|여부|가능|실패|예외"),
+}
+_CODE_PATTERNS_BY_QUESTION_KEYWORD = {
+    "login": re.compile(r"login|auth|token|credential", re.IGNORECASE),
+    "request": re.compile(r"request|route|endpoint|handle|controller", re.IGNORECASE),
+    "save": re.compile(r"save|store|upsert|persist|delete|update|create", re.IGNORECASE),
+    "analysis": re.compile(r"parse|chunk|embed|analy[sz]e", re.IGNORECASE),
+    "condition": re.compile(r"\bif\b|\bvalidate|\bcheck|\braise\b|\bthrow\b", re.IGNORECASE),
+}
 
 
 def fuse_evidence(state: QAState) -> dict:
@@ -26,16 +53,18 @@ def fuse_evidence(state: QAState) -> dict:
     evidence: list[dict] = []
     for hit in state.get("vector_results", []):
         if _is_user_evidence_candidate(hit, selected_target, graph_node_ids):
-            evidence.append(_vector_evidence(hit))
+            evidence.append(_vector_evidence(hit, state["question"]))
 
     evidence.extend(
-        _vector_evidence(hit) for hit in state.get("enriched_code_results", [])
+        _vector_evidence(hit, state["question"])
+        for hit in state.get("enriched_code_results", [])
     )
 
     if question_kind is QuestionKind.INTENT:
-        evidence.extend(_history_evidence(graph_nodes))
+        evidence.extend(_history_evidence(graph_nodes, state["question"]))
 
-    return {"evidence": _deduplicate(evidence)}
+    deduplicated = _deduplicate(evidence)
+    return {"evidence": deduplicated[:_MAX_EVIDENCE_BY_QUESTION_KIND[question_kind]]}
 
 
 def _is_user_evidence_candidate(
@@ -59,21 +88,55 @@ def _is_user_evidence_candidate(
     return bool((hit_ids & selected_ids) or (hit_ids & graph_node_ids))
 
 
-def _vector_evidence(hit: VectorHit) -> dict:
+def _vector_evidence(hit: VectorHit, question: str) -> dict:
     path = hit.get("path", "")
-    location = _code_location(path, hit.get("start_line"), hit.get("end_line"))
-    title = _symbol_name(hit.get("class_name"), hit.get("method_name"), path)
+    title = _symbol_name(
+        hit.get("class_name"),
+        hit.get("method_name"),
+        hit.get("param_signature"),
+        path,
+    )
+    return _code_evidence(
+        internal_id=hit["graph_node_id"],
+        title=title,
+        path=path,
+        source_code=hit.get("text"),
+        start_line=hit.get("start_line"),
+        end_line=hit.get("end_line"),
+        question=question,
+    )
+
+
+def _code_evidence(
+    *,
+    internal_id: str,
+    title: str,
+    path: str,
+    source_code: object,
+    start_line: object,
+    end_line: object,
+    question: str,
+) -> dict:
+    excerpt = _excerpt_from(source_code, start_line, question)
+    location = _code_location(path, excerpt["excerptStartLine"], excerpt["excerptEndLine"])
     return {
-        "id": _evidence_id("code", hit["graph_node_id"]),
+        "id": _evidence_id("code", internal_id),
         "type": "code",
         "title": title,
         "location": location,
         "description": f"{title} · {location}" if location else title,
-        "excerpt": hit.get("text"),
+        "excerpt": excerpt["text"],
+        "fullExcerpt": excerpt["fullText"],
+        "startLine": _optional_line(start_line),
+        "endLine": _optional_line(end_line),
+        "excerptStartLine": excerpt["excerptStartLine"],
+        "excerptEndLine": excerpt["excerptEndLine"],
+        "hasMoreBefore": excerpt["hasMoreBefore"],
+        "hasMoreAfter": excerpt["hasMoreAfter"],
     }
 
 
-def _history_evidence(nodes: list[dict]) -> list[dict]:
+def _history_evidence(nodes: list[dict], question: str) -> list[dict]:
     evidence: list[dict] = []
     for node in nodes:
         metadata = node.get("metadata")
@@ -81,7 +144,7 @@ def _history_evidence(nodes: list[dict]) -> list[dict]:
             continue
         node_type = metadata.get("node_type")
         if node_type == "MethodVersion":
-            item = _method_version_evidence(node, metadata)
+            item = _method_version_evidence(node, metadata, question)
         elif node_type == "Commit":
             item = _commit_evidence(node, metadata)
         else:
@@ -91,7 +154,9 @@ def _history_evidence(nodes: list[dict]) -> list[dict]:
     return evidence
 
 
-def _method_version_evidence(node: dict, metadata: Mapping) -> dict | None:
+def _method_version_evidence(
+    node: dict, metadata: Mapping, question: str
+) -> dict | None:
     method_key = metadata.get("method_key")
     source_code = metadata.get("source_code")
     if not isinstance(method_key, str) or not isinstance(source_code, str):
@@ -99,15 +164,15 @@ def _method_version_evidence(node: dict, metadata: Mapping) -> dict | None:
     parsed = _parse_method_key(method_key)
     title = parsed[1] if parsed else "코드 변경 버전"
     path = parsed[0] if parsed else ""
-    location = _code_location(path, metadata.get("start_line"), metadata.get("end_line"))
-    return {
-        "id": _evidence_id("code", node["id"]),
-        "type": "code",
-        "title": title,
-        "location": location,
-        "description": f"{title} · {location}" if location else title,
-        "excerpt": source_code,
-    }
+    return _code_evidence(
+        internal_id=node["id"],
+        title=title,
+        path=path,
+        source_code=source_code,
+        start_line=metadata.get("start_line"),
+        end_line=metadata.get("end_line"),
+        question=question,
+    )
 
 
 def _commit_evidence(node: dict, metadata: Mapping) -> dict | None:
@@ -115,7 +180,9 @@ def _commit_evidence(node: dict, metadata: Mapping) -> dict | None:
     if not isinstance(sha, str) or not sha:
         return None
     message = metadata.get("message")
-    title = message if isinstance(message, str) and message else f"커밋 {sha[:8]}"
+    if not isinstance(message, str) or not message.strip():
+        return None
+    title = message.strip()
     details = [metadata.get("author"), metadata.get("committed_at")]
     description = " · ".join(value for value in details if isinstance(value, str) and value)
     return {
@@ -137,9 +204,105 @@ def _parse_method_key(method_key: str) -> tuple[str, str] | None:
     return match.group("path"), symbol
 
 
-def _symbol_name(class_name: object, method_name: object, path: str) -> str:
+def _symbol_name(
+    class_name: object,
+    method_name: object,
+    param_signature: object,
+    path: str,
+) -> str:
     parts = [value for value in (class_name, method_name) if isinstance(value, str) and value]
-    return ".".join(parts) or path
+    symbol = ".".join(parts)
+    if symbol and isinstance(param_signature, str) and param_signature:
+        return f"{symbol}{param_signature}"
+    return symbol or path
+
+
+def _excerpt_from(source_code: object, start_line: object, question: str) -> dict:
+    source_lines = _source_lines(source_code)
+    source_start_line = _optional_line(start_line)
+    if not source_lines:
+        return {
+            "text": None,
+            "fullText": None,
+            "excerptStartLine": source_start_line,
+            "excerptEndLine": source_start_line,
+            "hasMoreBefore": False,
+            "hasMoreAfter": False,
+        }
+
+    if len(source_lines) <= _MAX_EXCERPT_LINES or _requests_full_code(question):
+        return _excerpt_result(
+            source_lines, 0, source_start_line, excerpt_length=len(source_lines)
+        )
+
+    excerpt_start = _relevant_line_index(source_lines, question)
+    excerpt_start = min(excerpt_start, len(source_lines) - _MAX_EXCERPT_LINES)
+    return _excerpt_result(source_lines, excerpt_start, source_start_line)
+
+
+def _source_lines(source_code: object) -> list[str]:
+    if not isinstance(source_code, str):
+        return []
+    lines = source_code.splitlines()
+    while lines and lines[0].startswith(_EMBEDDING_METADATA_PREFIXES):
+        lines.pop(0)
+    return lines
+
+
+def _relevant_line_index(source_lines: list[str], question: str) -> int:
+    """질문 속 식별어·의도어와 일치하는 실제 코드 행을 발췌 기준으로 잡는다."""
+    tokens = {token.lower() for token in _QUERY_TOKEN_PATTERN.findall(question)}
+    if tokens:
+        for index, line in enumerate(source_lines):
+            lowered = line.lower()
+            if any(token in lowered for token in tokens):
+                return max(0, index - 10)
+
+    for keyword, question_pattern in _QUESTION_KEYWORD_PATTERNS.items():
+        if not question_pattern.search(question):
+            continue
+        code_pattern = _CODE_PATTERNS_BY_QUESTION_KEYWORD[keyword]
+        for index, line in enumerate(source_lines):
+            if code_pattern.search(line):
+                return max(0, index - 10)
+
+    for index, line in enumerate(source_lines):
+        if re.search(r"\b(?:return|raise|throw)\b|\w+\s*\(", line):
+            return max(0, index - 10)
+    return 0
+
+
+def _excerpt_result(
+    source_lines: list[str],
+    excerpt_start: int,
+    source_start_line: int | None,
+    *,
+    excerpt_length: int = _MAX_EXCERPT_LINES,
+) -> dict:
+    excerpt_lines = source_lines[excerpt_start : excerpt_start + excerpt_length]
+    excerpt_end = excerpt_start + len(excerpt_lines)
+    excerpt_start_line = (
+        source_start_line + excerpt_start if source_start_line is not None else None
+    )
+    excerpt_end_line = (
+        source_start_line + excerpt_end - 1 if source_start_line is not None else None
+    )
+    return {
+        "text": "\n".join(excerpt_lines),
+        "fullText": "\n".join(source_lines),
+        "excerptStartLine": excerpt_start_line,
+        "excerptEndLine": excerpt_end_line,
+        "hasMoreBefore": excerpt_start > 0,
+        "hasMoreAfter": excerpt_end < len(source_lines),
+    }
+
+
+def _requests_full_code(question: str) -> bool:
+    return _FULL_CODE_REQUEST_PATTERN.search(question) is not None
+
+
+def _optional_line(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _code_location(path: str, start_line: object, end_line: object) -> str:

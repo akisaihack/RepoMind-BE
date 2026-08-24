@@ -1,0 +1,12 @@
+{
+  "question": "사용자명 중복 확인 요청 흐름을 알려줘.",
+  "graph": [
+    {"source": {"id": "method:frontend", "name": "Signup.validateUsernameAvailability", "type": "SYMBOL"}, "relation": "HAS_VERSION", "target": {"id": "version:frontend", "name": "코드 버전", "type": "SYMBOL"}},
+    {"source": {"id": "version:frontend", "name": "코드 버전", "type": "SYMBOL"}, "relation": "HTTP_CALLS", "target": {"id": "api:username", "name": "GET /api/user/checkUsernameAvailability", "type": "API"}},
+    {"source": {"id": "method:controller", "name": "UserController.checkUsernameAvailability(String)", "type": "SYMBOL"}, "relation": "EXPOSES", "target": {"id": "api:username", "name": "GET /api/user/checkUsernameAvailability", "type": "API"}},
+    {"source": {"id": "method:controller", "name": "UserController.checkUsernameAvailability(String)", "type": "SYMBOL"}, "relation": "HAS_VERSION", "target": {"id": "version:controller", "name": "코드 버전", "type": "SYMBOL"}},
+    {"source": {"id": "version:controller", "name": "코드 버전", "type": "SYMBOL"}, "relation": "CALLS", "target": {"id": "method:repository", "name": "UserRepository.existsByUsername(String)", "type": "SYMBOL"}},
+    {"source": {"id": "class:controller", "name": "UserController", "type": "CLASS"}, "relation": "CONTAINS", "target": {"id": "method:controller", "name": "UserController.checkUsernameAvailability(String)", "type": "SYMBOL"}},
+    {"source": {"id": "commit:username", "name": "commit", "type": "COMMIT"}, "relation": "INTRODUCED_IN", "target": {"id": "version:controller", "name": "코드 버전", "type": "SYMBOL"}}
+  ]
+}

@@ -20,11 +20,14 @@ app/parsers/languages/javascript.py와 거의 동일한 패턴이지만(호출/�
 구분해야 함.
 """
 
+import re
+
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node
 
 from app.dtos.analysis import (
     FieldResult,
+    HttpCall,
     MethodCall,
     TypeScriptClassResult,
     TypeScriptFileResult,
@@ -48,6 +51,14 @@ _TOP_LEVEL_FUNCTION_VALUE_TYPES = {"arrow_function", "function_expression"}
 _FIELD_TYPES = {"public_field_definition", "field_definition"}
 
 _MODULE_CLASS_SUFFIX = "$module"
+_HTTP_METHODS = "get|post|put|patch|delete|head|options"
+_HTTP_CALL_PATTERN = re.compile(
+    rf"(?:axios|http|api)\.({_HTTP_METHODS})\(\s*['\"](?P<path>[^'\"`]+)['\"]",
+    re.IGNORECASE,
+)
+_FETCH_CALL_PATTERN = re.compile(
+    r"fetch\(\s*['\"](?P<path>[^'\"`]+)['\"](?P<options>[^)]*)\)", re.IGNORECASE
+)
 
 _PATH_KEYWORD_LAYERS: tuple[tuple[str, str], ...] = (
     ("hooks/", "Hook"),
@@ -397,6 +408,27 @@ def _extract_invoked_names(body_node: Node, source_bytes: bytes) -> list[MethodC
     return calls
 
 
+def _extract_http_calls(body_node: Node, source_bytes: bytes) -> list[HttpCall]:
+    source = get_node_text(body_node, source_bytes)
+    calls = [
+        HttpCall(http_method=match.group(1).upper(), path=match.group("path"))
+        for match in _HTTP_CALL_PATTERN.finditer(source)
+    ]
+    for match in _FETCH_CALL_PATTERN.finditer(source):
+        method_match = re.search(
+            r"method\s*:\s*['\"](?P<method>GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)['\"]",
+            match.group("options"),
+            re.IGNORECASE,
+        )
+        calls.append(
+            HttpCall(
+                http_method=method_match.group("method").upper() if method_match else "GET",
+                path=match.group("path"),
+            )
+        )
+    return calls
+
+
 def _method_result_from_node(
     node: Node,
     source_bytes: bytes,
@@ -417,6 +449,7 @@ def _method_result_from_node(
 
     body_node = get_child_by_field(node, "body")
     invoked_calls = _extract_invoked_names(body_node, source_bytes) if body_node is not None else []
+    http_calls = _extract_http_calls(body_node, source_bytes) if body_node is not None else []
 
     return TypeScriptMethodResult(
         name=name,
@@ -427,4 +460,5 @@ def _method_result_from_node(
         text=get_node_text(range_node, source_bytes),
         api_mapping=None,
         invoked_calls=tuple(invoked_calls),
+        http_calls=tuple(http_calls),
     )

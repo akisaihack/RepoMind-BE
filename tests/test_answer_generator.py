@@ -41,6 +41,7 @@ def test_answer_generator_uses_langchain_without_external_api() -> None:
     assert "호출 순서 중심" in prompt_text
     assert "CancelController.cancel" in prompt_text
     assert "JSON 시각화 데이터는 생성하지 마세요" in prompt_text
+    assert "한 쌍의 백틱" in prompt_text
     assert '"summary"' in prompt_text
 
 
@@ -119,6 +120,12 @@ def test_answer_generator_removes_unknown_and_duplicate_evidence_ids() -> None:
                             "invented-id",
                             "evidence:code:valid",
                         ],
+                        "citations": [
+                            {
+                                "content": "서비스에서 취소합니다.",
+                                "evidenceIds": ["invented-id", "evidence:code:valid"],
+                            }
+                        ],
                     }
                 ],
                 "uncertainties": [],
@@ -128,6 +135,7 @@ def test_answer_generator_removes_unknown_and_duplicate_evidence_ids() -> None:
     result = AnswerGenerator(RunnableLambda(answer)).generate(input_data)
 
     assert result.claims[0].evidence_ids == ["evidence:code:valid"]
+    assert result.claims[0].citations[0].evidence_ids == ["evidence:code:valid"]
 
 
 def test_answer_generator_falls_back_when_provider_returns_plain_text() -> None:

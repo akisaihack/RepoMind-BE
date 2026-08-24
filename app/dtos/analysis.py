@@ -47,6 +47,14 @@ class MethodCall:
 
 
 @dataclass(frozen=True, slots=True)
+class HttpCall:
+    """프론트 함수에서 정적으로 확인된 HTTP 요청 하나."""
+
+    http_method: str
+    path: str
+
+
+@dataclass(frozen=True, slots=True)
 class FieldResult:
     """클래스 필드 하나 (이름 + 타입).
 
@@ -115,6 +123,7 @@ class JavaScriptMethodResult:
     text: str
     api_mapping: APIMapping | None
     invoked_calls: tuple[MethodCall, ...]
+    http_calls: tuple[HttpCall, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +179,7 @@ class TypeScriptMethodResult:
     text: str
     api_mapping: APIMapping | None
     invoked_calls: tuple[MethodCall, ...]
+    http_calls: tuple[HttpCall, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

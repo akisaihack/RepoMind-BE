@@ -1,5 +1,7 @@
 """Convert internal RAG output into the public chat response contract."""
 
+import logging
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -7,6 +9,7 @@ from app.ai.rag.state import QAState
 from app.dtos.chat import (
     ChatResponseData,
     Claim,
+    ClaimCitation,
     Confidence,
     Evidence,
     GraphData,
@@ -31,6 +34,9 @@ _SUGGESTED_QUESTIONS_BY_INTENT = {
 
 _GRAPH_NODE_TYPES = {"api", "symbol", "commit"}
 _EVIDENCE_TYPES = {"code", "itsm", "commit"}
+_FLOW_EDGE_TYPES = {"calls", "http_calls", "handled_by"}
+
+logger = logging.getLogger(__name__)
 
 
 class QAResponseAdapter:
@@ -66,6 +72,7 @@ class QAResponseAdapter:
 
 
 def _claims_from(query_response: QueryResponse, evidence: list[Evidence]) -> list[Claim]:
+    evidence_ids = {item.id for item in evidence}
     if query_response.claims:
         return [
             Claim(
@@ -73,7 +80,19 @@ def _claims_from(query_response: QueryResponse, evidence: list[Evidence]) -> lis
                 kind=claim.kind,
                 title=claim.title,
                 content=claim.content,
-                evidenceIds=claim.evidence_ids,
+                evidenceIds=[item_id for item_id in claim.evidence_ids if item_id in evidence_ids],
+                citations=[
+                    ClaimCitation(
+                        content=citation.content,
+                        evidenceIds=[
+                            item_id
+                            for item_id in citation.evidence_ids
+                            if item_id in evidence_ids
+                        ],
+                    )
+                    for citation in claim.citations
+                    if citation.content.strip()
+                ],
             )
             for claim in query_response.claims
         ]
@@ -117,6 +136,13 @@ def _evidence_from(raw_evidence: object) -> list[Evidence]:
                 location=_string_or_empty(raw_item.get("location")),
                 description=_string_or_empty(raw_item.get("description")),
                 excerpt=_optional_string(raw_item.get("excerpt")),
+                fullExcerpt=_optional_string(raw_item.get("fullExcerpt")),
+                startLine=_optional_int(raw_item.get("startLine")),
+                endLine=_optional_int(raw_item.get("endLine")),
+                excerptStartLine=_optional_int(raw_item.get("excerptStartLine")),
+                excerptEndLine=_optional_int(raw_item.get("excerptEndLine")),
+                hasMoreBefore=raw_item.get("hasMoreBefore") is True,
+                hasMoreAfter=raw_item.get("hasMoreAfter") is True,
             )
         )
     return evidence
@@ -124,18 +150,77 @@ def _evidence_from(raw_evidence: object) -> list[Evidence]:
 
 def _graph_from(state: QAState, response: QueryResponse) -> GraphData:
     if response.visualization is not None:
-        return GraphData(
+        graph = GraphData(
             nodes=[_graph_node_from(node.model_dump()) for node in response.visualization.nodes],
             edges=[_graph_edge_from(edge.model_dump()) for edge in response.visualization.edges],
+            kind=_graph_kind(response.intent),
         )
+        if response.intent is QueryIntent.FLOW:
+            graph = _filtered_flow_graph(graph)
+        _log_graph_diagnostics(response.intent, graph)
+        return graph
+
+    # FLOW 그래프는 CallFlowBuilder가 투영한 결과만 공개한다. 원본 탐색 그래프는
+    # IMPORTS/HAS_VERSION 같은 내부 관계를 포함할 수 있으므로 fallback으로 노출하지 않는다.
+    if response.intent is QueryIntent.FLOW:
+        graph = GraphData(kind="flow")
+        _log_graph_diagnostics(response.intent, graph)
+        return graph
 
     graph_results = state.get("graph_results", {}) or {}
     raw_nodes = graph_results.get("nodes", []) if isinstance(graph_results, Mapping) else []
     raw_edges = graph_results.get("edges", []) if isinstance(graph_results, Mapping) else []
-    return GraphData(
+    graph = GraphData(
         nodes=[_graph_node_from(node) for node in raw_nodes if isinstance(node, Mapping)],
         edges=[_graph_edge_from(edge) for edge in raw_edges if isinstance(edge, Mapping)],
+        kind=_graph_kind(response.intent),
     )
+    _log_graph_diagnostics(response.intent, graph)
+    return graph
+
+
+def _log_graph_diagnostics(intent: QueryIntent, graph: GraphData) -> None:
+    relation_counts = Counter(edge.type for edge in graph.edges)
+    if intent is QueryIntent.FLOW:
+        invalid_relations = set(relation_counts) - _FLOW_EDGE_TYPES
+        disconnected_nodes = {
+            node.id for node in graph.nodes
+        } - {node_id for edge in graph.edges for node_id in (edge.source, edge.target)}
+        if invalid_relations or disconnected_nodes:
+            logger.warning(
+                "FLOW graph contract violation filtered before response: "
+                "relations=%s disconnected=%s",
+                sorted(invalid_relations),
+                sorted(disconnected_nodes),
+            )
+    logger.info(
+        "Chat graph diagnostics: intent=%s kind=%s nodes=%d edges=%d relations=%s",
+        intent.value,
+        graph.kind,
+        len(graph.nodes),
+        len(graph.edges),
+        dict(sorted(relation_counts.items())),
+    )
+
+
+def _filtered_flow_graph(graph: GraphData) -> GraphData:
+    """Defence in depth for the public FLOW contract."""
+    edges = [edge for edge in graph.edges if edge.type in _FLOW_EDGE_TYPES]
+    connected_ids = {node_id for edge in edges for node_id in (edge.source, edge.target)}
+    return GraphData(
+        kind="flow",
+        edges=edges,
+        nodes=[node for node in graph.nodes if node.id in connected_ids],
+    )
+
+
+def _graph_kind(intent: QueryIntent) -> Literal["flow", "impact", "history", "relationship"]:
+    return {
+        QueryIntent.FLOW: "flow",
+        QueryIntent.DEPENDENCY: "impact",
+        QueryIntent.HISTORY: "history",
+        QueryIntent.EXPLANATION: "relationship",
+    }[intent]
 
 
 def _graph_node_from(raw_node: Mapping[str, Any]) -> GraphNode:
@@ -196,6 +281,10 @@ def _string_or_empty(value: object) -> str:
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 __all__ = ["QAResponseAdapter"]

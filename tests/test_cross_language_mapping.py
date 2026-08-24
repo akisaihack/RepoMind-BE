@@ -60,6 +60,34 @@ export function persist(item: unknown) {
 }
 """
 
+CONTROLLER_SRC = b"""
+package com.example;
+import org.springframework.web.bind.annotation.GetMapping;
+
+public class UserController {
+    @GetMapping("/api/users/check")
+    public boolean check() { return true; }
+}
+"""
+
+HTTP_CLIENT_SRC = b"""
+export const validateUsername = () => fetch("/api/users/check");
+"""
+
+PARAMETERIZED_CONTROLLER_SRC = b"""
+package com.example;
+import org.springframework.web.bind.annotation.GetMapping;
+
+public class UserController {
+    @GetMapping("/api/users/{id}")
+    public boolean getUser() { return true; }
+}
+"""
+
+ABSOLUTE_HTTP_CLIENT_SRC = b"""
+export const loadUser = () => axios.get("https://api.example.com/api/users/:id");
+"""
+
 
 def _merged_document():
     java_result = parse_java_file("PollService.java", JAVA_SRC)
@@ -90,7 +118,9 @@ def _persist_call_target(document, language: str):
         for edge in document.edges
         if edge.type == "HAS_VERSION" and edge.source == persist_method.id
     }
-    assert persist_version_ids, f"{language} persist 메서드의 MethodVersion을 못 찾음(테스트 전제 깨짐)"
+    assert persist_version_ids, (
+        f"{language} persist 메서드의 MethodVersion을 못 찾음(테스트 전제 깨짐)"
+    )
 
     persist_calls = [
         edge
@@ -143,3 +173,36 @@ def test_java_save_is_unaffected_by_other_languages_save_existing():
     ]
     assert len(java_method_nodes) == 1
     assert java_method_nodes[0].properties.get("language") == "java"
+
+
+def test_resolves_static_javascript_http_call_to_spring_endpoint():
+    frontend = map_javascript_file(
+        1, parse_javascript_file("src/api/user.js", HTTP_CLIENT_SRC), "commit1"
+    )
+    backend = map_java_file(1, parse_java_file("UserController.java", CONTROLLER_SRC), "commit1")
+
+    document = resolve_cross_file_references([frontend, backend])
+    edge = next(edge for edge in document.edges if edge.type == "HTTP_CALLS")
+    endpoint = next(node for node in document.nodes if node.id == edge.target)
+
+    assert endpoint.type == "Endpoint"
+    assert endpoint.properties["http_method"] == "GET"
+    assert endpoint.properties["path"] == "/api/users/check"
+    assert edge.properties.get("external") is not True
+
+
+def test_normalizes_absolute_client_url_and_path_parameter_to_spring_endpoint():
+    frontend = map_javascript_file(
+        1, parse_javascript_file("src/api/user.js", ABSOLUTE_HTTP_CLIENT_SRC), "commit1"
+    )
+    backend = map_java_file(
+        1, parse_java_file("UserController.java", PARAMETERIZED_CONTROLLER_SRC), "commit1"
+    )
+
+    document = resolve_cross_file_references([frontend, backend])
+    edge = next(edge for edge in document.edges if edge.type == "HTTP_CALLS")
+    endpoint = next(node for node in document.nodes if node.id == edge.target)
+
+    assert endpoint.properties["path"] == "/api/users/{id}"
+    assert edge.properties["path"] == "/api/users/:param"
+    assert edge.properties.get("external") is not True
