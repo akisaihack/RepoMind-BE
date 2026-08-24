@@ -49,31 +49,51 @@ class QAResponseAdapter:
             has_sufficient_evidence=has_sufficient_evidence,
         )
 
-        claim_kind: Literal["fact", "stated_intent", "inference"]
-        if not evidence:
-            claim_kind = "inference"
-        elif query_response.intent is QueryIntent.HISTORY:
-            claim_kind = "stated_intent"
-        else:
-            claim_kind = "fact"
+        claims = _claims_from(query_response, evidence)
+        uncertainties = list(
+            dict.fromkeys([*query_response.uncertainties, *uncertainties])
+        )
 
         return ChatResponseData(
             summary=query_response.answer,
-            claims=[
-                Claim(
-                    id=f"answer:{query_response.intent.value.lower()}",
-                    kind=claim_kind,
-                    title=_CLAIM_TITLE_BY_INTENT[query_response.intent],
-                    content=query_response.answer,
-                    evidenceIds=[item.id for item in evidence],
-                )
-            ],
+            claims=claims,
             evidence=evidence,
             confidence=confidence,
             graph=_graph_from(state, query_response),
             uncertainties=uncertainties,
             suggestedQuestions=_SUGGESTED_QUESTIONS_BY_INTENT[query_response.intent],
         )
+
+
+def _claims_from(query_response: QueryResponse, evidence: list[Evidence]) -> list[Claim]:
+    if query_response.claims:
+        return [
+            Claim(
+                id=claim.id,
+                kind=claim.kind,
+                title=claim.title,
+                content=claim.content,
+                evidenceIds=claim.evidence_ids,
+            )
+            for claim in query_response.claims
+        ]
+
+    claim_kind: Literal["fact", "stated_intent", "inference"]
+    if not evidence:
+        claim_kind = "inference"
+    elif query_response.intent is QueryIntent.HISTORY:
+        claim_kind = "stated_intent"
+    else:
+        claim_kind = "fact"
+    return [
+        Claim(
+            id=f"answer:{query_response.intent.value.lower()}",
+            kind=claim_kind,
+            title=_CLAIM_TITLE_BY_INTENT[query_response.intent],
+            content=query_response.answer,
+            evidenceIds=[item.id for item in evidence],
+        )
+    ]
 
 
 def _evidence_from(raw_evidence: object) -> list[Evidence]:
