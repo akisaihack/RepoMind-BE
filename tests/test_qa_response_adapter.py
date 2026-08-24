@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 from app.adapters.qa_response_adapter import QAResponseAdapter
 from app.dtos.response_generation import (
+    GeneratedClaim,
     GraphNode,
     GraphResponse,
     QueryIntent,
@@ -60,6 +61,45 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
     serialized = asdict(result)
     assert serialized["claims"][0]["evidenceIds"] == ["method:1", "method:2"]
     assert serialized["suggestedQuestions"] == ["이 흐름을 수정하면 영향 범위가 어떻게 돼?"]
+
+
+def test_uses_llm_generated_claims_without_copying_summary() -> None:
+    response = QueryResponse(
+        answer="JWT 요청 인증 흐름입니다.",
+        intent=QueryIntent.FLOW,
+        claims=[
+            GeneratedClaim(
+                id="claim-1",
+                kind="fact",
+                title="JWT 추출",
+                content="Authorization 헤더에서 JWT를 추출합니다.",
+                evidenceIds=["evidence:jwt"],
+            )
+        ],
+        uncertainties=["필터 등록 순서는 제공된 근거로 확인할 수 없습니다."],
+    )
+    state = {
+        "question": "JWT 인증 흐름",
+        "github_repository_id": 1,
+        "is_sufficient": True,
+        "evidence": [
+            {
+                "id": "evidence:jwt",
+                "type": "code",
+                "title": "JwtFilter.getJwtFromRequest",
+                "location": "JwtFilter.java · Line 10–15",
+                "description": "JWT 추출 코드",
+            }
+        ],
+        "graph_results": {"nodes": [], "edges": []},
+    }
+
+    result = QAResponseAdapter().adapt(state, response)
+
+    assert result.summary == "JWT 요청 인증 흐름입니다."
+    assert result.claims[0].content != result.summary
+    assert result.claims[0].evidenceIds == ["evidence:jwt"]
+    assert result.uncertainties == ["필터 등록 순서는 제공된 근거로 확인할 수 없습니다."]
 
 
 def test_falls_back_to_retrieval_graph_when_no_visualization_is_available() -> None:

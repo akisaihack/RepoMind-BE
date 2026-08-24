@@ -50,6 +50,24 @@ RESPONSE_SYSTEM_PROMPT = """당신은 코드베이스 분석 도우미입니다.
 - 사용자가 이해하기 쉽게 핵심 내용을 설명하세요.
 - 조회 결과가 부족한 경우 추측하지 말고 정보가 부족함을 명확히 설명하세요.
 - React Flow 노드나 엣지, JSON 시각화 데이터는 생성하지 마세요.
+- 반드시 지정된 JSON 답변 형식만 출력하고 Markdown 코드 블록을 사용하지 마세요.
+- claim의 evidenceIds에는 제공된 사용자용 근거 ID만 사용하세요.
+- 근거로 확인할 수 없는 내용은 fact로 작성하지 말고 uncertainties에 작성하세요.
+
+JSON 답변 형식:
+{{
+  "summary": "질문에 대한 핵심 답변",
+  "claims": [
+    {{
+      "id": "claim-1",
+      "kind": "fact | stated_intent | inference 중 하나",
+      "title": "주장 제목",
+      "content": "근거를 바탕으로 한 구체적인 설명",
+      "evidenceIds": ["제공된 근거 ID"]
+    }}
+  ],
+  "uncertainties": ["확인할 수 없거나 추가 검증이 필요한 내용"]
+}}
 """
 
 RESPONSE_USER_PROMPT = """사용자 질문: {question}
@@ -65,6 +83,9 @@ RESPONSE_USER_PROMPT = """사용자 질문: {question}
 
 개발 이력 조회 결과:
 {history_context}
+
+사용자에게 표시 가능한 근거:
+{evidence_context}
 """
 
 RESPONSE_INTENT_INSTRUCTIONS = {

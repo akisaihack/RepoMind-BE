@@ -22,16 +22,28 @@ class AnswerRelationContext(BaseModel):
     target: str
 
 
+class AnswerEvidenceContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    type: str
+    title: str
+    location: str
+    description: str
+
+
 class AnswerGenerationContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     code: list[AnswerCodeContext] = Field(default_factory=list)
     relations: list[AnswerRelationContext] = Field(default_factory=list)
     history: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[AnswerEvidenceContext] = Field(default_factory=list)
 
 
 __all__ = [
     "AnswerCodeContext",
+    "AnswerEvidenceContext",
     "AnswerGenerationContext",
     "AnswerRelationContext",
 ]

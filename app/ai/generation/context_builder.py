@@ -7,6 +7,7 @@ from typing import Any
 
 from app.dtos.answer_context import (
     AnswerCodeContext,
+    AnswerEvidenceContext,
     AnswerGenerationContext,
     AnswerRelationContext,
 )
@@ -71,8 +72,14 @@ class LLMContextBuilder:
             input_data.intent,
         )
         history = self._compact_history(input_data.context.history)
+        evidence = self._compact_evidence(input_data.context.evidence)
 
-        context = AnswerGenerationContext(code=code, relations=relations, history=history)
+        context = AnswerGenerationContext(
+            code=code,
+            relations=relations,
+            history=history,
+            evidence=evidence,
+        )
         if max_context_chars is not None:
             context = self._fit_budget(input_data.intent, context, max_context_chars)
         logger.info(
@@ -125,6 +132,26 @@ class LLMContextBuilder:
                     symbol=symbol,
                     similarity=float(similarity) if isinstance(similarity, int | float) else None,
                     code=code.strip(),
+                )
+            )
+        return compact
+
+    @staticmethod
+    def _compact_evidence(rows: list[dict[str, Any]]) -> list[AnswerEvidenceContext]:
+        compact: list[AnswerEvidenceContext] = []
+        seen: set[str] = set()
+        for row in rows:
+            evidence_id = _optional_string(row.get("id"))
+            if not evidence_id or evidence_id in seen:
+                continue
+            seen.add(evidence_id)
+            compact.append(
+                AnswerEvidenceContext(
+                    id=evidence_id,
+                    type=_optional_string(row.get("type")) or "code",
+                    title=_optional_string(row.get("title")) or "",
+                    location=_optional_string(row.get("location")) or "",
+                    description=_optional_string(row.get("description")) or "",
                 )
             )
         return compact
@@ -189,10 +216,15 @@ class LLMContextBuilder:
     ) -> AnswerGenerationContext:
         while _context_size(context) > max_context_chars:
             if intent is QueryIntent.HISTORY:
-                reduced = _remove_last(context.relations) or _remove_last(context.code)
+                reduced = (
+                    _remove_last(context.relations)
+                    or _remove_last(context.code)
+                    or _remove_last(context.evidence, keep=1)
+                )
             else:
                 reduced = (
                     _remove_last(context.history)
+                    or _remove_last(context.evidence, keep=1)
                     or _remove_last(context.relations)
                     or _remove_last(context.code, keep=1)
                 )

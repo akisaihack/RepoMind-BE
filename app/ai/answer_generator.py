@@ -18,7 +18,11 @@ from app.ai.generation.prompts import (
     RESPONSE_USER_PROMPT,
 )
 from app.clients.azure_openai import AZURE_OPENAI_API_VERSION
-from app.dtos.response_generation import ResponseGenerationInput
+from app.dtos.response_generation import (
+    GeneratedAnswer,
+    GeneratedClaim,
+    ResponseGenerationInput,
+)
 from app.errors import APIError
 
 logger = logging.getLogger(__name__)
@@ -40,8 +44,8 @@ class AnswerGenerator:
         self._chain = prompt | llm | StrOutputParser()
         self._context_builder = context_builder or LLMContextBuilder()
 
-    def generate(self, input_data: ResponseGenerationInput) -> str:
-        """Generate only prose; visualization is deliberately handled elsewhere."""
+    def generate(self, input_data: ResponseGenerationInput) -> GeneratedAnswer:
+        """Generate structured answer content; visualization remains deterministic."""
         context = self._context_builder.build(input_data)
         try:
             answer = self._invoke(input_data, context)
@@ -66,7 +70,7 @@ class AnswerGenerator:
 
         if not answer:
             raise AnswerGenerationError("The answer provider returned an empty response.")
-        return answer
+        return _parse_and_validate_answer(answer, context.evidence)
 
     def _invoke(self, input_data: ResponseGenerationInput, context: Any) -> str:
         values = {
@@ -77,8 +81,59 @@ class AnswerGenerator:
             "code_context": _serialize(context.code),
             "graph_context": _serialize(context.relations),
             "history_context": _serialize(context.history),
+            "evidence_context": _serialize(context.evidence),
         }
         return self._chain.invoke(values).strip()
+
+
+def _parse_and_validate_answer(raw_answer: str, evidence: list[Any]) -> GeneratedAnswer:
+    allowed_evidence_ids = {item.id for item in evidence}
+    try:
+        parsed = GeneratedAnswer.model_validate_json(_strip_json_fence(raw_answer))
+    except Exception:
+        logger.warning("Answer provider returned non-structured output; using safe fallback.")
+        return GeneratedAnswer(
+            summary=raw_answer.strip(),
+            claims=[
+                GeneratedClaim(
+                    id="claim-1",
+                    kind="inference",
+                    title="답변",
+                    content=raw_answer.strip(),
+                    evidenceIds=[],
+                )
+            ],
+            uncertainties=["구조화된 답변을 생성하지 못해 근거 연결을 확인할 수 없습니다."],
+        )
+
+    claims: list[GeneratedClaim] = []
+    seen_claim_ids: set[str] = set()
+    for index, claim in enumerate(parsed.claims, start=1):
+        claim_id = claim.id.strip()
+        if not claim_id or claim_id in seen_claim_ids:
+            claim_id = f"claim-{index}"
+        seen_claim_ids.add(claim_id)
+        evidence_ids = list(
+            dict.fromkeys(
+                evidence_id
+                for evidence_id in claim.evidence_ids
+                if evidence_id in allowed_evidence_ids
+            )
+        )
+        claims.append(
+            claim.model_copy(
+                update={"id": claim_id, "evidence_ids": evidence_ids},
+            )
+        )
+    return parsed.model_copy(update={"claims": claims})
+
+
+def _strip_json_fence(value: str) -> str:
+    stripped = value.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        return "\n".join(lines[1:-1]).strip()
+    return stripped
 
 
 def _serialize(value: list[Any]) -> str:
