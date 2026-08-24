@@ -222,13 +222,17 @@ def _to_graph_node(node, *, include_history_metadata: bool) -> dict:
 def _to_graph_edge(relationship) -> dict:
     source_key = relationship.start_node.get("key")
     target_key = relationship.end_node.get("key")
-    return {
+    edge = {
         "id": f"{source_key}-{relationship.type}-{target_key}",
         "source": source_key,
         "target": target_key,
         "type": relationship.type,
         "label": relationship.type,
     }
+    properties = dict(relationship.items()) if hasattr(relationship, "items") else {}
+    if properties:
+        edge["metadata"] = properties
+    return edge
 
 
 def _path_to_graph_dict(

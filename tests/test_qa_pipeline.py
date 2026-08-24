@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from app.ai.rag.nodes import (
     entity_resolver,
+    evidence_enricher,
     evidence_fusion,
     evidence_validator,
     graph_retriever,
@@ -48,6 +49,10 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
         call_order.append("fusion")
         return {"evidence": [{"id": "evidence:1"}]}
 
+    def enrich(_state):
+        call_order.append("enrichment")
+        return {"enriched_code_results": []}
+
     def validate(state):
         call_order.append("validation")
         return {"is_sufficient": True, "retry_count": state.get("retry_count", 0) + 1}
@@ -68,6 +73,7 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
         (vector_retriever, "search_vector_evidence", vector),
         (target_selector, "select_target", select),
         (graph_retriever, "search_graph_evidence", graph),
+        (evidence_enricher, "enrich_code_evidence", enrich),
         (evidence_fusion, "fuse_evidence", fuse),
         (evidence_validator, "validate_evidence_sufficiency", validate),
         (response_composer, "compose_answer", compose),
@@ -94,6 +100,7 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
         "vector",
         "target",
         "graph",
+        "enrichment",
         "fusion",
         "validation",
         "response",
@@ -155,6 +162,10 @@ def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
         call_order.append(f"fusion:{vector_attempt}")
         return {"evidence": []}
 
+    def enrich(_state):
+        call_order.append(f"enrichment:{vector_attempt}")
+        return {"enriched_code_results": []}
+
     def validate(state):
         retry_count = state.get("retry_count", 0) + 1
         call_order.append(f"validation:{retry_count}")
@@ -176,6 +187,7 @@ def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
         (vector_retriever, "search_vector_evidence", vector),
         (target_selector, "select_target", select),
         (graph_retriever, "search_graph_evidence", graph),
+        (evidence_enricher, "enrich_code_evidence", enrich),
         (evidence_fusion, "fuse_evidence", fuse),
         (evidence_validator, "validate_evidence_sufficiency", validate),
         (response_composer, "compose_answer", compose),
@@ -197,11 +209,13 @@ def test_pipeline_repeats_vector_graph_and_fusion_in_order_on_retry() -> None:
         "vector:1",
         "target:1",
         "graph:1",
+        "enrichment:1",
         "fusion:1",
         "validation:1",
         "vector:2",
         "target:2",
         "graph:2",
+        "enrichment:2",
         "fusion:2",
         "validation:2",
         "response",

@@ -60,6 +60,28 @@ def test_finds_existing_method_version_chunk_ids() -> None:
     assert found == {"version-a", "version-b"}
 
 
+def test_finds_repository_chunks_by_exact_method_version_ids() -> None:
+    session = Mock()
+    chunks = [Mock(graph_node_id="version-a"), Mock(graph_node_id="version-b")]
+    result = Mock()
+    result.all.return_value = chunks
+    session.scalars.return_value = result
+
+    found = CodeChunkRepository(session).find_by_graph_node_ids(
+        100, ["version-a", "version-b"]
+    )
+
+    assert found == chunks
+    session.scalars.assert_called_once()
+
+
+def test_skips_chunk_lookup_for_empty_method_version_ids() -> None:
+    session = Mock()
+
+    assert CodeChunkRepository(session).find_by_graph_node_ids(100, []) == []
+    session.scalars.assert_not_called()
+
+
 def test_searches_repository_chunks_by_cosine_distance() -> None:
     session = Mock()
     chunk = Mock()
