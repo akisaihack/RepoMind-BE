@@ -181,3 +181,71 @@ def test_username_flow_fixture_excludes_history_and_internal_graph_nodes() -> No
         "version:frontend",
         "version:controller",
     }
+
+
+def test_call_flow_keeps_jwt_path_and_prunes_accessor_fan_out() -> None:
+    root = {
+        "id": "method:filter",
+        "name": "JwtAuthenticationFilter.doFilterInternal",
+        "type": "SYMBOL",
+    }
+    root_version = {"id": "version:filter", "name": "코드 버전", "type": "SYMBOL"}
+    validate = {
+        "id": "method:validate",
+        "name": "JwtTokenProvider.validateToken",
+        "type": "SYMBOL",
+    }
+    jwt = {
+        "id": "method:jwt",
+        "name": "JwtAuthenticationFilter.getJwtFromRequest",
+        "type": "SYMBOL",
+    }
+    user_id = {
+        "id": "method:user-id",
+        "name": "JwtTokenProvider.getUserIdFromJWT",
+        "type": "SYMBOL",
+    }
+    load = {
+        "id": "method:load",
+        "name": "CustomUserDetailsService.loadUserById",
+        "type": "SYMBOL",
+    }
+    find = {"id": "method:find", "name": "UserRepository.findById", "type": "SYMBOL"}
+    create = {"id": "method:create", "name": "UserPrincipal.create", "type": "SYMBOL"}
+    getters = [
+        {"id": f"method:get-{index}", "name": f"User.getField{index}", "type": "SYMBOL"}
+        for index in range(20)
+    ]
+    relations = [
+        {"source": root, "relation": "HAS_VERSION", "target": root_version},
+        *[
+            {"source": root_version, "relation": "CALLS", "target": target}
+            for target in [validate, jwt, user_id, load]
+        ],
+        {"source": load, "relation": "CALLS", "target": find},
+        {"source": load, "relation": "CALLS", "target": create},
+        *[{"source": create, "relation": "CALLS", "target": getter} for getter in getters],
+    ]
+    input_data = ResponseGenerationInput(
+        question="JWT 검증 과정 흐름",
+        target="JwtAuthenticationFilter.doFilterInternal",
+        intent=QueryIntent.FLOW,
+        visualization_required=True,
+        visualization_type=VisualizationType.CALL_FLOW,
+        context=RetrievedContext(graph=relations),
+    )
+
+    result = VisualizationBuilder().build(input_data)
+
+    assert result is not None
+    assert {node.id for node in result.nodes} == {
+        "method:filter",
+        "method:validate",
+        "method:jwt",
+        "method:user-id",
+        "method:load",
+        "method:find",
+        "method:create",
+    }
+    assert all(".getField" not in node.label for node in result.nodes)
+    assert all("version:filter" not in node.id for node in result.nodes)

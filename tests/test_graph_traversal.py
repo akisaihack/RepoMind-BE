@@ -38,6 +38,8 @@ def test_call_traversal_uses_five_logical_depths_by_default() -> None:
     forward_query = client.execute_query.call_args.args[0]
     assert DEFAULT_CALLS_DEPTH == 5
     assert "*1..10" in forward_query
+    assert "owner_path" in forward_query
+    assert "(:Method)-[:HAS_VERSION]->(start)" in forward_query
 
     calls_backward(client, "method:start")
     backward_query = client.execute_query.call_args.args[0]

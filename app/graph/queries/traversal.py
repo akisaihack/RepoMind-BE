@@ -77,6 +77,8 @@ def calls_forward(
     query = f"""
     MATCH path =
       (start {{key: $start_node_id}})-[:CALLS|HTTP_CALLS|HAS_VERSION*1..{depth * 2}]->(end)
+    OPTIONAL MATCH owner_path =
+      (:Method)-[:HAS_VERSION]->(start)
     OPTIONAL MATCH start_endpoint_path =
       (:Endpoint)<-[:EXPOSES]-(:Method)-[:HAS_VERSION]->(start)
     OPTIONAL MATCH endpoint_path =
@@ -85,7 +87,7 @@ def calls_forward(
     OPTIONAL MATCH downstream_path =
       (controller)-[:HAS_VERSION]->(:MethodVersion)
       -[:CALLS|HAS_VERSION*1..{depth * 2}]->(downstream)
-    RETURN path, start_endpoint_path, endpoint_path, downstream_path
+    RETURN path, owner_path, start_endpoint_path, endpoint_path, downstream_path
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
     return _path_to_graph_dict(result.records)
