@@ -1,14 +1,16 @@
-"""직접 호출 그래프의 MethodVersion을 PostgreSQL 코드 출처로 보강한다."""
+"""호출 그래프를 BFS로 순회해 MethodVersion의 코드 출처를 보강한다."""
 
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Mapping
 
 from app.ai.rag.state import QAState
 from app.extensions import db
+from app.graph.queries.traversal import DEFAULT_CALLS_DEPTH
 from app.repositories.code_chunk import CodeChunkRepository
 
-MAX_ENRICHED_CODE_CONTEXTS = 4
+MAX_CALL_DEPTH = DEFAULT_CALLS_DEPTH
+MAX_ENRICHED_CODE_CONTEXTS = 20
 _SIMPLE_GETTER_BODY = re.compile(r"\{\s*return\s+(?:this\.)?\w+;\s*\}\s*$", re.DOTALL)
 _SIMPLE_SETTER_BODY = re.compile(
     r"\{\s*(?:this\.)?(?P<field>\w+)\s*=\s*(?P=field);\s*\}\s*$",
@@ -17,7 +19,7 @@ _SIMPLE_SETTER_BODY = re.compile(
 
 
 def enrich_code_evidence(state: QAState) -> dict:
-    """선택 대상이 직접 호출하는 주요 내부 메서드의 코드 청크를 조회한다."""
+    """선택 대상부터 최대 5단계의 주요 내부 호출 코드 청크를 조회한다."""
     selected_target = state.get("selected_target") or {}
     selected_version_id = selected_target.get("graph_node_id")
     if not isinstance(selected_version_id, str):
@@ -25,8 +27,7 @@ def enrich_code_evidence(state: QAState) -> dict:
 
     graph_results = state.get("graph_results", {}) or {}
     edges = graph_results.get("edges", [])
-    direct_method_ids = _direct_unambiguous_method_ids(edges, selected_version_id)
-    version_ids = _single_version_ids(edges, direct_method_ids)
+    version_ids = _bfs_version_ids(edges, selected_version_id)
     if not version_ids:
         return {"enriched_code_results": []}
 
@@ -45,39 +46,53 @@ def enrich_code_evidence(state: QAState) -> dict:
     return {"enriched_code_results": results}
 
 
-def _direct_unambiguous_method_ids(edges: list[dict], selected_version_id: str) -> list[str]:
-    method_ids: list[str] = []
-    seen: set[str] = set()
-    for edge in edges:
-        if edge.get("type") != "CALLS" or edge.get("source") != selected_version_id:
-            continue
-        metadata = edge.get("metadata")
-        if isinstance(metadata, Mapping) and metadata.get("ambiguous") is True:
-            continue
-        target = edge.get("target")
-        if isinstance(target, str) and target not in seen:
-            seen.add(target)
-            method_ids.append(target)
-    return method_ids
-
-
-def _single_version_ids(edges: list[dict], method_ids: list[str]) -> list[str]:
-    method_id_set = set(method_ids)
+def _bfs_version_ids(
+    edges: list[dict],
+    selected_version_id: str,
+    max_depth: int = MAX_CALL_DEPTH,
+) -> list[str]:
+    """CALLS→HAS_VERSION을 한 단계로 보고 버전 노드를 BFS 순서로 반환한다."""
+    called_methods_by_version: dict[str, list[str]] = defaultdict(list)
     versions_by_method: dict[str, list[str]] = defaultdict(list)
     for edge in edges:
+        edge_type = edge.get("type")
         source = edge.get("source")
         target = edge.get("target")
-        if (
-            edge.get("type") == "HAS_VERSION"
-            and source in method_id_set
-            and isinstance(target, str)
-        ):
+        if not isinstance(source, str) or not isinstance(target, str):
+            continue
+        if edge_type == "CALLS":
+            metadata = edge.get("metadata")
+            if isinstance(metadata, Mapping) and metadata.get("ambiguous") is True:
+                continue
+            if target not in called_methods_by_version[source]:
+                called_methods_by_version[source].append(target)
+        elif edge_type == "HAS_VERSION":
             versions_by_method[source].append(target)
-    return [
-        versions[0]
-        for method_id in method_ids
-        if len(versions := versions_by_method[method_id]) == 1
-    ]
+
+    queue = deque([(selected_version_id, 0)])
+    visited_versions = {selected_version_id}
+    visited_methods: set[str] = set()
+    ordered_version_ids: list[str] = []
+
+    while queue:
+        version_id, depth = queue.popleft()
+        if depth >= max_depth:
+            continue
+        for method_id in called_methods_by_version[version_id]:
+            if method_id in visited_methods:
+                continue
+            visited_methods.add(method_id)
+            versions = versions_by_method[method_id]
+            if len(versions) != 1:
+                continue
+            next_version_id = versions[0]
+            if next_version_id in visited_versions:
+                continue
+            visited_versions.add(next_version_id)
+            ordered_version_ids.append(next_version_id)
+            queue.append((next_version_id, depth + 1))
+
+    return ordered_version_ids
 
 
 def _is_trivial_method(method_name: str | None, source_code: str) -> bool:
