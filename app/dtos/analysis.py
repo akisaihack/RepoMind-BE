@@ -154,6 +154,62 @@ class JavaScriptFileResult:
 
 
 @dataclass(frozen=True, slots=True)
+class TypeScriptMethodResult:
+    """TypeScript/TSX의 메서드·함수 하나를 파싱한 결과 (class 메서드, 모듈
+    최상위 함수, 화살표 함수로 대입된 const 전부 이 형태로 통일해서 담음).
+
+    필드 모양은 JavaScriptMethodResult와 동일 — 이름으로 언어를 구분하기
+    위해 의도적으로 분리함.
+    """
+
+    name: str | None
+    param_signature: str
+    is_constructor: bool
+    start_line: int
+    end_line: int
+    text: str
+    api_mapping: APIMapping | None
+    invoked_calls: tuple[MethodCall, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TypeScriptClassResult:
+    """TS의 class/interface 하나, 또는 파일당 합성 "module" 클래스(orphan
+    최상위 함수들을 담는 컨테이너) 하나.
+
+    kind는 "class" 또는 "interface" (TS엔 실제 interface 문법이 있어서 Java와
+    동일하게 구분함 — JS/Python과 다른 점). extends_generic_params는 TS의
+    제네릭 상속(`extends BaseRepository<User>`)에서 타입 인자를 보존함(Java의
+    JpaRepository<Entity> 패턴과 동일하게 MANAGES 엣지 추론에 씀). implements는
+    `implements`절의 타입들(제네릭 인자는 벗겨내고 베이스 이름만).
+    """
+
+    name: str | None
+    kind: str  # "class" | "interface"
+    layer: str
+    extends: str | None
+    extends_generic_params: tuple[str, ...]
+    implements: tuple[str, ...]
+    fields: tuple[FieldResult, ...]
+    methods: tuple[TypeScriptMethodResult, ...]
+    qualified_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TypeScriptFileResult:
+    """TypeScript/TSX 소스 파일 하나를 파싱한 최종 결과.
+
+    package는 항상 None(JS와 동일한 이유). imports는 import된 모듈 경로
+    문자열 목록.
+    """
+
+    path: str
+    package: str | None
+    imports: tuple[str, ...]
+    classes: tuple[TypeScriptClassResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PythonMethodResult:
     """Python의 메서드·함수 하나를 파싱한 결과 (class 메서드, 모듈 최상위
     함수 전부 이 형태로 통일해서 담음. `__init__`은 is_constructor=True).

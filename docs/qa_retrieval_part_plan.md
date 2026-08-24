@@ -648,6 +648,70 @@ JavaScript 파서 + 공통 스캐폴딩을 추가함. **⚠️ 커밋/푸시는 
 
 ---
 
+## 0-11. TypeScript(.ts/.tsx) 파서 추가 (2026-08-24, 이어서 완료)
+
+0-9/0-10과 같은 additive 패턴으로 TypeScript/TSX까지 추가함. **여전히
+커밋/푸시는 안 했음 — 파일만 로컬 워킹 트리에 씀, 그래프 담당자 리뷰 필요한
+것도 0-9/0-10과 동일.**
+
+**JS 파서와 다른 점(그래서 새로 만든 이유 — 재사용 안 하고 별도 파일로 분리)**:
+- `.ts` grammar와 `.tsx` grammar가 실제로 다른 두 개 패키지 export(`tree-sitter-typescript`가
+  `language_typescript()`/`language_tsx()`를 각각 제공)라, 확장자로 반드시
+  구분해서 골라 씀 — `.ts`는 JSX 문법을 아예 못 읽음.
+- `interface` 문법이 실제로 있어서 `kind="interface"`로 Java와 동일하게
+  구분함(JS/Python엔 이 구분이 없음). 인터페이스는 본문 없는 시그니처라
+  `methods`는 항상 빈 튜플.
+- 클래스 필드에 타입 주석이 실제로 있어서(`private repo: PollRepository`),
+  JS/Python처럼 생성자 호출로 타입을 추측할 필요 없이 진짜 타입을 그대로 씀 —
+  리시버 타입 매칭 정확도가 JS/Python보다 높음.
+- 제네릭 상속(`extends BaseRepository<User, number>`)을 Java의
+  `JpaRepository<Entity>`와 동일한 방식으로 `extends_generic_params`에 보존함.
+
+**추가/수정된 파일:**
+- `app/parsers/languages/typescript.py` (신규) — TS/TSX tree-sitter 파서.
+- `app/dtos/analysis.py` (수정) — `TypeScriptFileResult`/`ClassResult`/
+  `MethodResult` 추가.
+- `app/graph/mappings.py` (수정) — `map_typescript_file` 추가(기존과 동일하게
+  `_map_file_document`에 위임, `language="typescript"`).
+- `app/parsers/registry.py` (수정) — `.ts`/`.tsx` 확장자 등록(둘 다 같은
+  `parse_typescript_file`을 참조 — 내부에서 `path.endswith(".tsx")`로 grammar
+  분기). "의도적 미지원" 주석에서 TS/TSX 제거(이제 지원하므로).
+- `pyproject.toml` (수정) — `tree-sitter-typescript>=0.23,<1` 의존성 추가.
+- `tests/test_typescript_parser.py` (신규, 9개) + 기존
+  `test_cross_language_mapping.py`(Java/JS/Python/TS 4-way `save()` 충돌
+  테스트로 확장)/`test_parser_registry.py`(`.ts`/`.tsx` 등록 확인 + 벤더 제외
+  fixture에 `.ts`/`.tsx` 추가)에도 반영 — **총 31개 테스트 전부 로컬에서
+  통과 확인.**
+
+**구현 중 발견 + 고친 버그**: `_extract_class_heritage()`가 처음엔 `extends`
+절에서 베이스 클래스 식별자 노드 하나만 골라 텍스트를 뽑았는데, 이 방식이
+그 바로 옆의 제네릭 타입 인자 노드(`type_arguments`, `<User, number>` 부분)를
+텍스트에서 통째로 빼먹어서 `extends_generic_params`가 항상 빈 튜플로
+나오는 버그가 있었음. `class UserRepository extends BaseRepository<User, number>`
+같은 실제 케이스로 스모크 테스트하다가 발견함. `extends` 절 전체 텍스트에서
+`extends` 키워드만 떼어내는 방식으로 고쳐서 해결 — 수정 후
+`extends_generic_params == ("User", "number")`로 정상 확인, 회귀 방지용
+테스트(`test_generic_extends_captures_all_type_arguments`)도 추가함.
+
+**검증한 것 / 못 한 것 (솔직하게):**
+- 순수 로직(파서 출력, 매퍼 출력, 4-way 크로스 언어 이름 충돌)은 로컬에서
+  직접 실행해서 확인함(31개 테스트 전부 통과).
+- **대상 리포(폴링앱)의 실제 데이터로는 아직 검증 안 함** — 이 리포 자체는
+  프론트가 JS(.jsx)라 `.ts`/`.tsx` 파일이 없어서, Python처럼 합성 fixture로만
+  검증한 상태. 만약 다른 실제 TS 프로젝트(예: RepoMind-FE 자체가 TS라면 그걸)로
+  재분석을 돌려보면 실 데이터 검증이 가능함 — 아직 안 해봄.
+- Flask/DB 붙는 테스트는 여전히 이 환경에서 못 돌려봄(0-9/0-10과 동일한
+  한계) — `pytest` 전체는 로컬에서 한 번 돌려보고 머지할 것.
+
+**다음에 할 것:**
+1. `pytest` 로컬에서 전체(31개) 돌려서 초록불 재확인
+2. 그래프 담당 팀원한테 0-9/0-10과 함께 `mappings.py`/`registry.py` TS 관련
+   변경 내용 공유하고 리뷰받기
+3. 여유 있으면 TS 실 데이터로 재분석 한 번 돌려서(RepoMind-FE 등) 그래프에
+   `language="typescript"` 노드가 실제로 생기는지 확인
+
+---
+
 ## 1. 지금 코드 상태 (이미 되어 있는 것 / 안 되어 있는 것)
 
 - **Phase 1(배관) 완료**: `app/ai/rag/state.py`(QAState 스키마), `app/ai/rag/pipeline.py`(`build_graph()`, `run_qa_pipeline()`) 둘 다 실제로 짜여 있고, `scripts/check_pipeline_skeleton.py`로 그래프 흐름(병렬 분기 → join → 조건부 재시도 루프)이 정상 동작함을 이미 검증함. **이 두 파일은 건드릴 필요 없음** — 그대로 재사용.
