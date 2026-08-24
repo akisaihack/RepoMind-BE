@@ -45,6 +45,8 @@ class VectorHit(TypedDict):
     path: str
     class_name: str | None
     method_name: str | None
+    start_line: int
+    end_line: int
     api_http_method: str | None
     api_path: str | None
     commit_hash: str
@@ -88,7 +90,10 @@ class QAState(TypedDict):
     # --- ③ Graph Retriever가 채움 ---
     graph_results: NotRequired[dict]  # app.dtos.chat.GraphData 호환 형태 목표
 
-    # --- ④ Evidence Fusion이 채움 ---
+    # --- ⑤ Evidence Enricher가 채움 ---
+    enriched_code_results: NotRequired[list[VectorHit]]
+
+    # --- ⑥ Evidence Fusion이 채움 ---
     evidence: NotRequired[list[dict]]  # app.dtos.chat.Evidence 호환 형태 목표
 
     # --- ⑤ Evidence Validator가 채움 (조건부 엣지 분기 기준) ---
