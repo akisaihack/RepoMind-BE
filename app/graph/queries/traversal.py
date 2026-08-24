@@ -61,12 +61,18 @@ Step 3 참고):
 """
 
 from app.clients.neo4j import Neo4jClient
+from app.dtos.history_retrieval import (
+    CommitHistoryMetadata,
+    MethodVersionHistoryMetadata,
+)
 
 DEFAULT_CALLS_DEPTH = 3
 DEFAULT_NEIGHBORHOOD_DEPTH = 2
 
 
-def calls_forward(client: Neo4jClient, start_node_id: str, depth: int = DEFAULT_CALLS_DEPTH) -> dict:
+def calls_forward(
+    client: Neo4jClient, start_node_id: str, depth: int = DEFAULT_CALLS_DEPTH
+) -> dict:
     """flow: CALLS(+HAS_VERSION으로 버전<->메서드 건너뛰기)를 depth까지 순방향 탐색."""
     query = f"""
     MATCH path = (start {{key: $start_node_id}})-[:CALLS|HAS_VERSION*1..{depth * 2}]->(end)
@@ -76,12 +82,16 @@ def calls_forward(client: Neo4jClient, start_node_id: str, depth: int = DEFAULT_
     return _path_to_graph_dict(result.records)
 
 
-def calls_backward(client: Neo4jClient, start_node_id: str, depth: int = DEFAULT_CALLS_DEPTH) -> dict:
+def calls_backward(
+    client: Neo4jClient, start_node_id: str, depth: int = DEFAULT_CALLS_DEPTH
+) -> dict:
     """impact: CALLS 역방향 — 누가 이 메서드를 호출하는지. start_node_id는 반드시
     method_node_id(Method key)여야 함 — CALLS의 도착점이 항상 Method라서, 버전
     key(graph_node_id)를 넘기면 매치가 하나도 안 돼 항상 빈 결과가 나옴."""
     query = f"""
-    MATCH path = (caller)-[:CALLS|HAS_VERSION*1..{depth * 2}]->(start:Method {{key: $start_node_id}})
+    MATCH path =
+      (caller)-[:CALLS|HAS_VERSION*1..{depth * 2}]->
+      (start:Method {{key: $start_node_id}})
     RETURN path
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
@@ -121,7 +131,7 @@ def changed_by_history(client: Neo4jClient, start_node_id: str) -> dict:
     RETURN history, deletion
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
-    return _path_to_graph_dict(result.records)
+    return _path_to_graph_dict(result.records, include_history_metadata=True)
 
 
 def _looks_like_path(value) -> bool:
@@ -174,12 +184,38 @@ def _node_detail(node) -> str | None:
     return None
 
 
-def _to_graph_node(node) -> dict:
+def _node_metadata(node) -> dict:
+    """LLM 이력 컨텍스트가 사용할 원본 속성을 손실 없이 정규화한다."""
+    labels = node.labels
+    if "MethodVersion" in labels:
+        return MethodVersionHistoryMetadata(
+            method_key=node.get("methodKey", ""),
+            source_code=node.get("sourceCode", ""),
+            start_line=node.get("startLine", 0),
+            end_line=node.get("endLine", 0),
+            content_hash=node.get("contentHash", ""),
+            api_http_method=node.get("httpMethod"),
+            api_path=node.get("apiPath"),
+        ).model_dump(exclude_none=True)
+    if "Commit" in labels:
+        return CommitHistoryMetadata(
+            sha=node.get("sha", ""),
+            message=node.get("message"),
+            author=node.get("authorName"),
+            authored_at=node.get("authoredAt"),
+            committed_at=node.get("committedAt"),
+            url=node.get("url"),
+        ).model_dump(exclude_none=True)
+    return {}
+
+
+def _to_graph_node(node, *, include_history_metadata: bool) -> dict:
     return {
         "id": node.get("key"),
         "type": _node_type(node),
         "label": _node_label(node),
         "detail": _node_detail(node),
+        "metadata": _node_metadata(node) if include_history_metadata else {},
     }
 
 
@@ -195,7 +231,9 @@ def _to_graph_edge(relationship) -> dict:
     }
 
 
-def _path_to_graph_dict(records: list) -> dict:
+def _path_to_graph_dict(
+    records: list, *, include_history_metadata: bool = False
+) -> dict:
     """Neo4j 쿼리 결과 레코드 리스트를 GraphData 호환 {"nodes", "edges"} dict로 변환."""
     nodes_by_id: dict[str, dict] = {}
     edges_by_key: dict[tuple, dict] = {}
@@ -207,7 +245,10 @@ def _path_to_graph_dict(records: list) -> dict:
             for node in value.nodes:
                 key = node.get("key")
                 if key and key not in nodes_by_id:
-                    nodes_by_id[key] = _to_graph_node(node)
+                    nodes_by_id[key] = _to_graph_node(
+                        node,
+                        include_history_metadata=include_history_metadata,
+                    )
             for relationship in value.relationships:
                 edge_key = (
                     relationship.start_node.get("key"),
