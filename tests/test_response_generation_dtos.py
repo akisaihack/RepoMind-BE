@@ -119,3 +119,66 @@ def test_adapter_uses_selected_target_instead_of_vector_top_one() -> None:
     )
 
     assert result.target == "authenticateUser"
+
+
+def test_adapter_preserves_history_metadata_for_later_context_building() -> None:
+    version_metadata = {
+        "node_type": "MethodVersion",
+        "method_key": "method:authenticate",
+        "source_code": "String jwt = generateToken(authentication);",
+        "start_line": 23,
+        "end_line": 36,
+        "content_hash": "content-hash",
+    }
+    commit_metadata = {
+        "node_type": "Commit",
+        "sha": "abc123456789",
+        "message": "feat: JWT 로그인 추가",
+        "author": "Developer",
+        "authored_at": "2026-08-01T10:00:00Z",
+        "committed_at": "2026-08-01T11:00:00Z",
+    }
+    result = ResponseInputAdapter().adapt_qa_state(
+        {
+            "question": "authenticateUser 변경 이력을 알려줘",
+            "github_repository_id": 1,
+            "question_kind": "intent",
+            "graph_results": {
+                "nodes": [
+                    {
+                        "id": "version:authenticate",
+                        "type": "symbol",
+                        "label": "코드 버전 (L23-36)",
+                        "detail": "method:authenticate",
+                        "metadata": version_metadata,
+                    },
+                    {
+                        "id": "commit:abc123",
+                        "type": "commit",
+                        "label": "abc12345",
+                        "detail": "abc123456789",
+                        "metadata": commit_metadata,
+                    },
+                ],
+                "edges": [
+                    {
+                        "id": "history:1",
+                        "source": "version:authenticate",
+                        "target": "commit:abc123",
+                        "type": "INTRODUCED_IN",
+                    }
+                ],
+            },
+        }
+    )
+
+    relation = result.context.graph[0]
+    assert relation["source"]["metadata"] == {
+        **version_metadata,
+        "detail": "method:authenticate",
+    }
+    assert relation["target"]["metadata"] == {
+        **commit_metadata,
+        "detail": "abc123456789",
+    }
+    assert result.context.history[0]["metadata"] == commit_metadata
