@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.ai.rag.nodes import (
     entity_resolver,
+    evidence_enricher,
     evidence_fusion,
     evidence_validator,
     graph_retriever,
@@ -42,7 +43,8 @@ def build_graph():
 
     흐름:
         START -> question_analyzer -> entity_resolver -> vector_retriever
-            -> target_selector -> graph_retriever -> evidence_fusion -> evidence_validator
+            -> target_selector -> graph_retriever -> evidence_enricher
+            -> evidence_fusion -> evidence_validator
         evidence_validator --(근거 부족 & retry_count < MAX_RETRIES)--> vector_retriever로 복귀
         evidence_validator --(충분 또는 재시도 소진)--> response_composer -> END
 
@@ -57,6 +59,7 @@ def build_graph():
     graph.add_node("vector_retriever", vector_retriever.search_vector_evidence)
     graph.add_node("target_selector", target_selector.select_target)
     graph.add_node("graph_retriever", graph_retriever.search_graph_evidence)
+    graph.add_node("evidence_enricher", evidence_enricher.enrich_code_evidence)
     graph.add_node("evidence_fusion", evidence_fusion.fuse_evidence)
     graph.add_node("evidence_validator", evidence_validator.validate_evidence_sufficiency)
     graph.add_node("response_composer", response_composer.compose_answer)
@@ -68,7 +71,8 @@ def build_graph():
     graph.add_edge("entity_resolver", "vector_retriever")
     graph.add_edge("vector_retriever", "target_selector")
     graph.add_edge("target_selector", "graph_retriever")
-    graph.add_edge("graph_retriever", "evidence_fusion")
+    graph.add_edge("graph_retriever", "evidence_enricher")
+    graph.add_edge("evidence_enricher", "evidence_fusion")
 
     graph.add_edge("evidence_fusion", "evidence_validator")
 
@@ -137,6 +141,7 @@ __all__ = [
     "QAState",
     "build_graph",
     "entity_resolver",
+    "evidence_enricher",
     "evidence_fusion",
     "evidence_validator",
     "graph_retriever",

@@ -22,6 +22,7 @@ from app.adapters.response_input_adapter import ResponseInputAdapter
 from app.ai.generation.context_builder import LLMContextBuilder
 from app.ai.rag.nodes import (
     entity_resolver,
+    evidence_enricher,
     evidence_fusion,
     evidence_validator,
     graph_retriever,
@@ -75,6 +76,7 @@ def main() -> None:
             ("pgvector 검색", vector_retriever.search_vector_evidence),
             ("분석 대상 선택", target_selector.select_target),
             ("Neo4j 검색", graph_retriever.search_graph_evidence),
+            ("직접 호출 코드 보강", evidence_enricher.enrich_code_evidence),
             ("검색 근거 통합", evidence_fusion.fuse_evidence),
             ("근거 충분성 검증", evidence_validator.validate_evidence_sufficiency),
         )
@@ -98,6 +100,10 @@ def main() -> None:
     print(f"- 그래프 노드: {len(graph_results.get('nodes', []))}개")
     print(f"- 그래프 엣지: {len(graph_results.get('edges', []))}개")
     print(f"- 통합 근거: {len(state.get('evidence', []))}건")
+
+    print("\n=== 사용자용 확인 근거 ===")
+    for item in state.get("evidence", []):
+        print(f"- [{item.get('type')}] {item.get('title')} · {item.get('location')}")
 
     print("\n=== LLM 전용 컨텍스트 ===")
     print(f"- 코드: {len(llm_context.code)}건")

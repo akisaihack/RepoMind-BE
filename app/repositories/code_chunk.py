@@ -94,6 +94,20 @@ class CodeChunkRepository:
         )
         return set(self._session.scalars(statement).all())
 
+    def find_by_graph_node_ids(
+        self,
+        github_repository_id: int,
+        graph_node_ids: list[str],
+    ) -> list[CodeChunk]:
+        """Return repository-scoped code chunks for exact MethodVersion IDs."""
+        if not graph_node_ids:
+            return []
+        statement = select(CodeChunk).where(
+            CodeChunk.github_repository_id == github_repository_id,
+            CodeChunk.graph_node_id.in_(graph_node_ids),
+        )
+        return list(self._session.scalars(statement).all())
+
     def search_similar(
         self,
         query_embedding: list[float],
