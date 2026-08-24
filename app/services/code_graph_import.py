@@ -1,11 +1,17 @@
-"""Parse a local Java repository and persist its repository-scoped code graph."""
+"""Parse a local repository (Java/JavaScript/JSX) and persist its
+repository-scoped code graph.
+
+지원 언어/확장자는 app/parsers/registry.py에 등록돼 있음 — 새 언어를 추가할
+때 이 파일은 손댈 필요 없음(레지스트리를 통해서만 파서/매퍼를 찾음).
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.graph.mappings import map_java_file, resolve_cross_file_references
+from app.graph.mappings import resolve_cross_file_references
 from app.graph.repositories.code_graph import CodeGraphRepository
+from app.parsers.registry import discover_source_files, language_support_for
 from app.services.repository_identity import RepositoryIdentity, RepositoryIdentityValidator
 
 
@@ -59,15 +65,17 @@ class CodeGraphImportService:
         if self._on_identity_validated is not None:
             self._on_identity_validated(identity)
 
-        java_files = sorted(repository_path.rglob("*.java"))
+        source_files = discover_source_files(repository_path)
         documents = []
-        if java_files:
-            from app.parsers.languages.java import parse_java_file
-
-        for file_path in java_files:
+        for file_path in source_files:
+            support = language_support_for(file_path)
+            if support is None:
+                # discover_source_files가 이미 지원 확장자만 걸러서 주기
+                # 때문에 이론상 발생하지 않지만, 방어적으로 건너뜀.
+                continue
             relative_path = file_path.relative_to(repository_path).as_posix()
-            file_result = parse_java_file(relative_path, file_path.read_bytes())
-            documents.append(map_java_file(github_repository_id, file_result, commit_hash))
+            file_result = support.parse(relative_path, file_path.read_bytes())
+            documents.append(support.map_to_graph(github_repository_id, file_result, commit_hash))
 
         document = resolve_cross_file_references(documents)
         skipped_external = self._graph_repository.save(

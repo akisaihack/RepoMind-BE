@@ -12,8 +12,8 @@ app/graph/mappings.py와 대응 관계: mappings.py는 같은 파싱 결과를 �
 "벡터로 시작점 찾고 그래프로 깊이 탐색" 구조를 완성함.
 """
 
-from app.dtos.analysis import JavaFileResult, JavaMethodResult
 from app.dtos.chunk import CodeChunk
+from app.dtos.protocols import FileResultProtocol, MethodResultProtocol
 from app.graph.identifiers import (
     class_key,
     constructor_key,
@@ -34,7 +34,7 @@ def _build_chunk_text(
     package: str | None,
     class_name: str | None,
     layer: str,
-    method_result: JavaMethodResult,
+    method_result: MethodResultProtocol,
 ) -> str:
     """실제로 임베딩할 텍스트를 만듦.
 
@@ -53,31 +53,35 @@ def _build_chunk_text(
 
 def build_chunks_from_file(
     github_repository_id: int,
-    file_result: JavaFileResult,
+    file_result: FileResultProtocol,
     commit_hash: str,
 ) -> list[CodeChunk]:
-    """자바 파일 파싱 결과 하나에서 메서드/생성자 단위 청크를 전부 뽑음.
+    """파일 하나(어떤 언어든)의 파싱 결과에서 메서드/생성자 단위 청크를 전부 뽑음.
 
     github_repository_id/commit_hash는 실제 GitHub 저장소 id와 실제 커밋
     SHA여야 함 — 이 청크가 그래프 쪽 Repository/Commit 노드와 정확히 같은
     key로 연결되기 때문에 더미값을 넣으면 연결이 끊어짐.
+
+    file_result.classes의 각 클래스는 kind가 이미 "class"/"interface"로
+    정규화돼 있다고 가정함(FileResultProtocol 계약) — 여기서 언어별로
+    분기하지 않음.
     """
     chunks: list[CodeChunk] = []
     normalized_path = normalize_repository_path(file_result.path)
 
     for class_result in file_result.classes:
         if not class_result.name:
-            raise ValueError(f"Unnamed Java declaration in {normalized_path}.")
+            raise ValueError(f"Unnamed declaration in {normalized_path}.")
         qualified_name = class_result.qualified_name or java_qualified_name(
             file_result.package, (), class_result.name
         )
-        node_type = "interface" if class_result.kind == "interface" else "class"
+        node_type = class_result.kind
         class_id = class_key(
             github_repository_id, normalized_path, node_type, qualified_name
         )
         for method_result in class_result.methods:
             if not method_result.name:
-                raise ValueError(f"Unnamed Java method in {qualified_name}.")
+                raise ValueError(f"Unnamed method in {qualified_name}.")
             graph_node_id = (
                 constructor_key(class_id, class_result.name, method_result.param_signature)
                 if method_result.is_constructor
