@@ -1,6 +1,14 @@
 """Neo4j traversal 결과의 이력 메타데이터 보존 테스트."""
 
-from app.graph.queries.traversal import _path_to_graph_dict
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+from app.graph.queries.traversal import (
+    DEFAULT_CALLS_DEPTH,
+    _path_to_graph_dict,
+    calls_backward,
+    calls_forward,
+)
 
 
 class FakeNode(dict):
@@ -20,6 +28,20 @@ class FakePath:
     def __init__(self, nodes, relationships):
         self.nodes = nodes
         self.relationships = relationships
+
+
+def test_call_traversal_uses_five_logical_depths_by_default() -> None:
+    client = MagicMock()
+    client.execute_query.return_value = SimpleNamespace(records=[])
+
+    calls_forward(client, "version:start")
+    forward_query = client.execute_query.call_args.args[0]
+    assert DEFAULT_CALLS_DEPTH == 5
+    assert "*1..10" in forward_query
+
+    calls_backward(client, "method:start")
+    backward_query = client.execute_query.call_args.args[0]
+    assert "*1..10" in backward_query
 
 
 def test_preserves_method_version_and_commit_history_metadata() -> None:

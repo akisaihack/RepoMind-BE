@@ -66,7 +66,7 @@ from app.dtos.history_retrieval import (
     MethodVersionHistoryMetadata,
 )
 
-DEFAULT_CALLS_DEPTH = 3
+DEFAULT_CALLS_DEPTH = 5
 DEFAULT_NEIGHBORHOOD_DEPTH = 2
 
 
