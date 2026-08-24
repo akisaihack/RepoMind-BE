@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.ai.answer_generator import AnswerGenerationError
-from app.dtos.response_generation import QueryIntent
+from app.dtos.response_generation import GeneratedAnswer, GeneratedClaim, QueryIntent
 from app.errors import APIError
 from app.sample.mock_response_generation import get_mock_response_generation_input
 from app.services.response_service import ResponseService
@@ -14,7 +14,19 @@ from app.visualization.visualization_builder import VisualizationBuilder
 
 def test_response_service_combines_answer_and_visualization() -> None:
     answer_generator = Mock()
-    answer_generator.generate.return_value = "취소 호출 흐름입니다."
+    answer_generator.generate.return_value = GeneratedAnswer(
+        summary="취소 호출 흐름입니다.",
+        claims=[
+            GeneratedClaim(
+                id="claim-1",
+                kind="fact",
+                title="호출 흐름",
+                content="컨트롤러에서 서비스로 호출됩니다.",
+                evidenceIds=[],
+            )
+        ],
+        uncertainties=[],
+    )
     input_data = get_mock_response_generation_input()
     service = ResponseService(answer_generator, VisualizationBuilder())
 
@@ -22,6 +34,7 @@ def test_response_service_combines_answer_and_visualization() -> None:
 
     assert response.answer == "취소 호출 흐름입니다."
     assert response.intent is QueryIntent.FLOW
+    assert response.claims[0].title == "호출 흐름"
     assert response.visualization is not None
     answer_generator.generate.assert_called_once_with(input_data)
 

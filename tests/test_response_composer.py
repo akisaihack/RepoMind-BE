@@ -30,6 +30,8 @@ def test_response_composer_adapts_qa_state_and_stores_json_response() -> None:
             "answer": "취소 요청은 컨트롤러에서 서비스로 전달됩니다.",
             "intent": "FLOW",
             "visualization": None,
+            "claims": [],
+            "uncertainties": [],
         }
     }
     input_data = response_service.generate.call_args.args[0]

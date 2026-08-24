@@ -19,11 +19,17 @@ from pathlib import Path
 
 from app.dtos.graph import GraphDocument
 from app.dtos.protocols import FileResultProtocol
-from app.graph.mappings import map_java_file, map_javascript_file, map_python_file
+from app.graph.mappings import (
+    map_java_file,
+    map_javascript_file,
+    map_python_file,
+    map_typescript_file,
+)
 from app.parsers.languages.html import parse_html_file
 from app.parsers.languages.java import parse_java_file
 from app.parsers.languages.javascript import parse_javascript_file
 from app.parsers.languages.python import parse_python_file
+from app.parsers.languages.typescript import parse_typescript_file
 
 ParseFn = Callable[[str, bytes], FileResultProtocol]
 MapFn = Callable[[int, FileResultProtocol, str], GraphDocument]
@@ -57,9 +63,17 @@ _SUPPORTED_EXTENSIONS: dict[str, LanguageSupport] = {
     ".html": LanguageSupport(
         language="javascript", parse=parse_html_file, map_to_graph=map_javascript_file
     ),
+    # .ts/.tsx는 grammar가 서로 다르지만(JSX 파싱 가능 여부) 같은 함수가
+    # path.endswith(".tsx")로 내부에서 골라 쓰므로 parse는 동일 참조를 공유함.
+    ".ts": LanguageSupport(
+        language="typescript", parse=parse_typescript_file, map_to_graph=map_typescript_file
+    ),
+    ".tsx": LanguageSupport(
+        language="typescript", parse=parse_typescript_file, map_to_graph=map_typescript_file
+    ),
 }
-# 의도적으로 미지원: .ts/.tsx(타입스크립트 전용 문법 미지원), .jsp(범용
-# tree-sitter 문법이 없어서 이번 범위에서 제외 — 실수로 빠뜨린 게 아님).
+# 의도적으로 미지원: .jsp — 범용 tree-sitter 문법이 없어서 이번 범위에서
+# 제외 (실수로 빠뜨린 게 아님).
 
 # node_modules는 JS 지원을 켜는 순간 파일 수가 수만 개로 뛰기 때문에
 # discover_source_files가 아예 이 디렉터리들 안으로 들어가지 않게 함.
