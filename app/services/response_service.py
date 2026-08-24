@@ -22,7 +22,7 @@ class ResponseService:
 
     def generate(self, input_data: ResponseGenerationInput) -> QueryResponse:
         try:
-            answer = self._answer_generator.generate(input_data)
+            generated = self._answer_generator.generate(input_data)
         except AnswerGenerationError as exc:
             raise APIError(
                 "ANSWER_PROVIDER_ERROR",
@@ -32,9 +32,11 @@ class ResponseService:
 
         visualization = self._visualization_builder.build(input_data)
         return QueryResponse(
-            answer=answer,
+            answer=generated.summary,
             intent=input_data.intent,
             visualization=visualization,
+            claims=generated.claims,
+            uncertainties=generated.uncertainties,
         )
 
 

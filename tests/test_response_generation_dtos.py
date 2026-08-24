@@ -60,12 +60,22 @@ def test_adapter_converts_latest_qa_state_graph_shape() -> None:
                     }
                 ],
             },
+            "evidence": [
+                {
+                    "id": "evidence:code:cancel",
+                    "type": "code",
+                    "title": "CancelController.cancel",
+                    "location": "CancelController.java · Line 10–20",
+                    "description": "취소 요청 진입점",
+                }
+            ],
         }
     )
 
     assert result.intent is QueryIntent.FLOW
     assert result.visualization_required is True
     assert result.target == "cancel"
+    assert result.context.evidence[0]["id"] == "evidence:code:cancel"
     assert result.context.graph == [
         {
             "source": {

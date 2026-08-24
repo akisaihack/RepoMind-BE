@@ -50,6 +50,7 @@ class ResponseInputAdapter:
                 code=list(state.get("vector_results", [])),
                 graph=_normalize_graph_relations(graph_nodes, graph_results.get("edges", [])),
                 history=[node for node in graph_nodes if node.get("type") == "commit"],
+                evidence=list(state.get("evidence", [])),
             ),
         )
 
