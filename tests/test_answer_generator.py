@@ -41,6 +41,7 @@ def test_answer_generator_uses_langchain_without_external_api() -> None:
     assert "호출 순서 중심" in prompt_text
     assert "CancelController.cancel" in prompt_text
     assert "JSON 시각화 데이터는 생성하지 마세요" in prompt_text
+    assert "한 쌍의 백틱" in prompt_text
     assert '"summary"' in prompt_text
 
 
