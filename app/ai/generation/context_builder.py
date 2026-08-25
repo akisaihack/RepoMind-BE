@@ -1,6 +1,5 @@
 """Build a compact LLM context without changing visualization graph data."""
 
-import json
 import logging
 from collections.abc import Mapping
 from typing import Any
@@ -11,6 +10,7 @@ from app.dtos.answer_context import (
     AnswerGenerationContext,
     AnswerRelationContext,
 )
+from app.dtos.history_context import HistoryChangeContext
 from app.dtos.response_generation import QueryIntent, ResponseGenerationInput
 
 logger = logging.getLogger(__name__)
@@ -28,21 +28,6 @@ _RELATIONS_BY_INTENT = {
         {"CALLS", "DECLARES", "CONTAINS", "IMPLEMENTS", "EXTENDS", "EXPOSES"}
     ),
 }
-
-_HISTORY_FIELDS = (
-    "sha",
-    "message",
-    "title",
-    "author",
-    "date",
-    "created_at",
-    "path",
-    "status",
-    "additions",
-    "deletions",
-    "changes",
-)
-
 
 class LLMContextBuilder:
     """Remove transport-only data, limiting size only for a provider retry."""
@@ -192,20 +177,12 @@ class LLMContextBuilder:
     @staticmethod
     def _compact_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         compact: list[dict[str, Any]] = []
-        seen: set[str] = set()
         for row in rows:
-            item = {key: row[key] for key in _HISTORY_FIELDS if row.get(key) is not None}
-            if not item:
-                name = _optional_string(row.get("name") or row.get("label"))
-                if name:
-                    item = {"summary": name}
-            if not item:
+            try:
+                item = HistoryChangeContext.model_validate(row)
+            except ValueError:
                 continue
-            identity = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            compact.append(item)
+            compact.append(item.model_dump(exclude_none=True))
         return compact
 
     def _fit_budget(
@@ -231,7 +208,7 @@ class LLMContextBuilder:
             if not reduced:
                 break
         _truncate_last_code(context, max_context_chars)
-        _truncate_last_history(context, max_context_chars)
+        _reduce_history_context(context, max_context_chars)
         return context
 
 
@@ -251,18 +228,26 @@ def _truncate_last_code(context: AnswerGenerationContext, max_chars: int) -> Non
     item.code = f"{item.code[:keep]}…" if keep else ""
 
 
-def _truncate_last_history(context: AnswerGenerationContext, max_chars: int) -> None:
-    if _context_size(context) <= max_chars or not context.history:
-        return
-    item = context.history[-1]
-    for key, value in reversed(item.items()):
-        if not isinstance(value, str):
-            continue
-        overage = _context_size(context) - max_chars
-        keep = max(0, len(value) - overage - 20)
-        item[key] = f"{value[:keep]}…" if keep else ""
+def _reduce_history_context(context: AnswerGenerationContext, max_chars: int) -> None:
+    """Preserve the latest change while reducing verbose source/diff data first."""
+    for item in context.history:
         if _context_size(context) <= max_chars:
             return
+        version = item.get("version")
+        if isinstance(version, dict) and isinstance(version.get("source_code"), str):
+            source = version["source_code"]
+            overage = _context_size(context) - max_chars
+            keep = max(0, len(source) - overage - 20)
+            version["source_code"] = f"{source[:keep]}…" if keep else ""
+        diff = item.get("diff")
+        if isinstance(diff, dict):
+            for field in ("removed_lines", "added_lines"):
+                lines = diff.get(field)
+                while isinstance(lines, list) and lines and _context_size(context) > max_chars:
+                    lines.pop()
+
+    while len(context.history) > 1 and _context_size(context) > max_chars:
+        context.history.pop(0)
 
 
 def _context_size(context: AnswerGenerationContext) -> int:

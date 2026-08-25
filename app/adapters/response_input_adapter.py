@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from typing import Any
 
+from app.ai.generation.history_context_builder import HistoryContextBuilder
 from app.ai.rag.state import QAState
 from app.dtos.question import QuestionKind
 from app.dtos.response_generation import (
@@ -39,6 +40,13 @@ class ResponseInputAdapter:
         visualization_type = _VISUALIZATION_BY_QUESTION_KIND.get(question_kind)
         graph_results = state.get("graph_results", {}) or {}
         graph_nodes = graph_results.get("nodes", [])
+        graph_edges = graph_results.get("edges", [])
+        evidence = list(state.get("evidence", []))
+        history = (
+            HistoryContextBuilder().build(graph_nodes, graph_edges, evidence)
+            if intent is QueryIntent.HISTORY
+            else []
+        )
 
         return ResponseGenerationInput(
             question=state["question"],
@@ -48,9 +56,9 @@ class ResponseInputAdapter:
             visualization_type=visualization_type,
             context=RetrievedContext(
                 code=list(state.get("vector_results", [])),
-                graph=_normalize_graph_relations(graph_nodes, graph_results.get("edges", [])),
-                history=[node for node in graph_nodes if node.get("type") == "commit"],
-                evidence=list(state.get("evidence", [])),
+                graph=_normalize_graph_relations(graph_nodes, graph_edges),
+                history=[item.model_dump(exclude_none=True) for item in history],
+                evidence=evidence,
             ),
         )
 
