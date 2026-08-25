@@ -209,3 +209,36 @@ def test_history_answer_prompt_distinguishes_facts_from_inference() -> None:
     assert "앞 7자리만 표시하세요" in received[0]
     assert "읽기 쉬운 날짜로 표현하세요" in received[0]
     assert '"added_lines":["validate();"]' in received[0]
+
+
+def test_normalizes_commit_sha_date_and_numeric_html_entities() -> None:
+    input_data = get_mock_response_generation_input()
+    full_sha = "0e8bdc2cc40e13565a2510fa9639df25c1aba5e0"
+
+    result = AnswerGenerator(
+        RunnableLambda(
+            lambda _prompt: json.dumps(
+                {
+                    "summary": (
+                        f"2018-05-02T21:07:54Z&#xC758;&nbsp;{full_sha}&#xC5D0;서 변경"
+                    ),
+                    "claims": [
+                        {
+                            "id": "claim-1",
+                            "kind": "fact",
+                            "title": f"커밋 {full_sha}",
+                            "content": f"{full_sha}&#xC5D0;서 수정됨",
+                            "evidenceIds": [],
+                            "citations": [],
+                        }
+                    ],
+                    "uncertainties": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+    ).generate(input_data)
+
+    assert result.summary == "2018년 5월 2일의 0e8bdc2에서 변경"
+    assert result.claims[0].title == "커밋 0e8bdc2"
+    assert result.claims[0].content == "0e8bdc2에서 수정됨"
