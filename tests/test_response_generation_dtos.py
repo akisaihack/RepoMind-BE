@@ -191,4 +191,26 @@ def test_adapter_preserves_history_metadata_for_later_context_building() -> None
         **commit_metadata,
         "detail": "abc123456789",
     }
-    assert result.context.history[0]["metadata"] == commit_metadata
+    assert result.context.history == [
+        {
+            "method": "method:authenticate",
+            "change_type": "first_observed",
+            "version": {
+                "node_id": "version:authenticate",
+                "method_key": "method:authenticate",
+                "symbol": "method:authenticate",
+                "source_code": "String jwt = generateToken(authentication);",
+                "start_line": 23,
+                "end_line": 36,
+                "content_hash": "content-hash",
+            },
+            "commit": {
+                "node_id": "commit:abc123",
+                "sha": "abc123456789",
+                "message": "feat: JWT 로그인 추가",
+                "author": "Developer",
+                "authored_at": "2026-08-01T10:00:00Z",
+                "committed_at": "2026-08-01T11:00:00Z",
+            },
+        }
+    ]
