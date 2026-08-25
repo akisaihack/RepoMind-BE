@@ -52,6 +52,7 @@ class Repository(db.Model):
         unique=True,
     )
     latest_analyzed_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    history_indexed_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     analysis_status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

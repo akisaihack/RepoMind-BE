@@ -12,6 +12,7 @@ def mocks():
         "git_clone": MagicMock(),
         "history_import": MagicMock(),
         "code_graph_import": MagicMock(),
+        "method_history_indexer": MagicMock(),
         "chunk_import": MagicMock(),
         "repository_store": MagicMock(),
     }
@@ -23,6 +24,7 @@ def service(mocks):
         git_clone_service=mocks["git_clone"],
         history_import_service=mocks["history_import"],
         code_graph_import_service=mocks["code_graph_import"],
+        method_history_indexer=mocks["method_history_indexer"],
         chunk_import_service=mocks["chunk_import"],
         repository_store=mocks["repository_store"],
     )
@@ -38,8 +40,10 @@ def test_run_pipeline_success(service, mocks):
     mock_path = MagicMock()
     mocks["git_clone"].clone.return_value.__enter__.return_value = mock_path
     mocks["git_clone"].get_commit_hash.return_value = "fakehash"
+    mocks["method_history_indexer"].index.return_value.last_commit_sha = "fakehash"
     
     repo_mock = MagicMock()
+    repo_mock.history_indexed_sha = None
     mocks["repository_store"].get.return_value = repo_mock
 
     service.run_pipeline(repo_id, "https://github.com/foo/bar", "main")
@@ -49,12 +53,17 @@ def test_run_pipeline_success(service, mocks):
     mocks["repository_store"].transition_status.assert_any_call(repo_id, "indexing", "ready")
     
     # Check method calls
-    mocks["history_import"].import_history.assert_called_once()
+    mocks["history_import"].import_history.assert_called_once_with("main")
     mocks["git_clone"].clone.assert_called_once_with("https://github.com/foo/bar", "main")
     mocks["code_graph_import"].import_repository.assert_called_once_with(
         github_repository_id=123,
         repository_path=mock_path,
         commit_hash="fakehash",
+    )
+    mocks["method_history_indexer"].index.assert_called_once_with(
+        github_repository_id=123,
+        repository_path=mock_path,
+        after_sha=None,
     )
     mocks["chunk_import"].import_repository.assert_called_once_with(
         github_repository_id=123,
@@ -65,6 +74,7 @@ def test_run_pipeline_success(service, mocks):
     # Check attributes updated
     assert repo_mock.github_repository_id == 123
     assert repo_mock.latest_analyzed_sha == "fakehash"
+    assert repo_mock.history_indexed_sha == "fakehash"
 
 
 def test_run_pipeline_failure(service, mocks):

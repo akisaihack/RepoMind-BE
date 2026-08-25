@@ -19,6 +19,7 @@ from app.services.embedding import EmbeddingService
 from app.services.git_clone import GitCloneService
 from app.services.github_history import GitHubHistoryCollector
 from app.services.github_history_import import GitHubHistoryImportService
+from app.services.method_history_index import MethodHistoryIndexer
 from app.services.repository_identity import RepositoryIdentityValidator
 
 
@@ -76,6 +77,7 @@ def create_analysis_pipeline(
         graph_repository=code_graph_repo,
         identity_validator=identity_validator,
     )
+    method_history_indexer = MethodHistoryIndexer(git_clone_service, code_graph_repo)
     
     # GitHub History Import
     github_collector = GitHubHistoryCollector(github_client)
@@ -102,6 +104,7 @@ def create_analysis_pipeline(
         git_clone_service=git_clone_service,
         history_import_service=history_import_service,
         code_graph_import_service=code_graph_import_service,
+        method_history_indexer=method_history_indexer,
         chunk_import_service=chunk_import_service,
         repository_store=repository_store,
     )

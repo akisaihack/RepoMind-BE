@@ -8,6 +8,7 @@ from app.services.chunk_import import ChunkImportService
 from app.services.code_graph_import import CodeGraphImportService
 from app.services.git_clone import GitCloneService
 from app.services.github_history_import import GitHubHistoryImportService
+from app.services.method_history_index import MethodHistoryIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,14 @@ class AnalysisPipelineService:
         git_clone_service: GitCloneService,
         history_import_service: GitHubHistoryImportService,
         code_graph_import_service: CodeGraphImportService,
+        method_history_indexer: MethodHistoryIndexer,
         chunk_import_service: ChunkImportService,
         repository_store: RepositoryStore,
     ) -> None:
         self._git_clone = git_clone_service
         self._history_import = history_import_service
         self._code_graph_import = code_graph_import_service
+        self._method_history_indexer = method_history_indexer
         self._chunk_import = chunk_import_service
         self._repository_store = repository_store
 
@@ -45,13 +48,24 @@ class AnalysisPipelineService:
             
             # 2. Fetch GitHub history first to get github_repository_id
             logger.info("Importing GitHub history...")
-            history_result = self._history_import.import_history()
+            history_result = self._history_import.import_history(branch)
             github_repo_id = history_result.repository_id
             
             # 3. Clone the repository locally
             logger.info(f"Cloning {repository_url} (branch: {branch})...")
             with self._git_clone.clone(repository_url, branch) as repo_path:
                 commit_hash = self._git_clone.get_commit_hash(repo_path)
+
+                repo = self._repository_store.get(repository_id)
+                history_checkpoint = repo.history_indexed_sha if repo else None
+
+                # Build historical MethodVersions before replacing the HEAD snapshot.
+                logger.info("Indexing first-parent method history...")
+                history_index_result = self._method_history_indexer.index(
+                    github_repository_id=github_repo_id,
+                    repository_path=repo_path,
+                    after_sha=history_checkpoint,
+                )
                 
                 # 4. Import the code graph into Neo4j
                 logger.info("Importing code graph...")
@@ -75,6 +89,7 @@ class AnalysisPipelineService:
             if repo:
                 repo.github_repository_id = github_repo_id
                 repo.latest_analyzed_sha = commit_hash
+                repo.history_indexed_sha = history_index_result.last_commit_sha
                 self._repository_store.transition_status(repository_id, "indexing", "ready")
                 
         except Exception as exc:
