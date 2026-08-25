@@ -140,6 +140,29 @@ def test_records_deleted_methods_when_saving_a_commit_snapshot() -> None:
     }
 
 
+def test_partial_history_save_does_not_mark_unrelated_methods_deleted() -> None:
+    client, transaction = _transactional_client()
+
+    CodeGraphRepository(client).save(
+        _document(),
+        github_repository_id=100,
+        commit_hash="abc123",
+        mark_missing_deleted=False,
+    )
+
+    assert all("DELETED_IN" not in call.args[0] for call in transaction.run.call_args_list)
+
+
+def test_marks_only_selected_methods_deleted() -> None:
+    client, transaction = _transactional_client()
+
+    CodeGraphRepository(client).mark_methods_deleted(100, "abc123", ["method:one"])
+
+    call = transaction.run.call_args
+    assert "UNWIND $methodKeys" in call.args[0]
+    assert call.kwargs["methodKeys"] == ["method:one"]
+
+
 def test_resolves_nearest_method_version_and_deleted_state() -> None:
     client = Mock()
     version = {"key": "method:version:hash"}
