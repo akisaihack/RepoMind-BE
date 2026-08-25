@@ -21,8 +21,8 @@ class GitHubHistoryCollector:
     def __init__(self, client: GitHubClient) -> None:
         self._client = client
 
-    def collect(self) -> DevelopmentHistoryDTO:
-        """Collect all supported development-history resources."""
+    def collect(self, branch: str) -> DevelopmentHistoryDTO:
+        """Collect resources and commits reachable from the requested branch."""
         repository = _to_repository(self._client.get_repository())
         branches = tuple(_to_branch(item) for item in self._client.list_branches())
 
@@ -35,7 +35,8 @@ class GitHubHistoryCollector:
             self._collect_pull_request(item["number"]) for item in self._client.list_pull_requests()
         )
         commits = tuple(
-            _to_commit(self._client.get_commit(item["sha"])) for item in self._client.list_commits()
+            _to_commit(self._client.get_commit(item["sha"]))
+            for item in self._client.list_commits(branch)
         )
 
         return DevelopmentHistoryDTO(

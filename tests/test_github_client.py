@@ -75,6 +75,26 @@ def test_github_client_combines_paginated_commit_files() -> None:
     assert [file["filename"] for file in commit["files"]] == ["file-1.py", "file-2.py"]
 
 
+def test_github_client_lists_commits_from_requested_branch() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=[])
+
+    with GitHubClient(
+        "test-token",
+        "octocat",
+        "Hello-World",
+        base_url="https://api.github.test",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        client.list_commits("develop")
+
+    assert requests[0].url.params["sha"] == "develop"
+    assert requests[0].url.params["per_page"] == "100"
+
+
 def test_github_client_converts_rate_limit_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

@@ -32,9 +32,9 @@ class GitHubHistoryImportService:
         self._graph_mapper = graph_mapper
         self._graph_repository = graph_repository
 
-    def import_history(self) -> GitHubHistoryImportResult:
+    def import_history(self, branch: str) -> GitHubHistoryImportResult:
         """Collect once, persist patches first, then write their IDs into the graph."""
-        history = self._collector.collect()
+        history = self._collector.collect(branch)
         file_change_ids = self._file_change_repository.upsert_changes(
             history.repository.id,
             history.commits,
