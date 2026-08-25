@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.dtos.graph import GraphDocument
 from app.graph.mappings import resolve_cross_file_references
 from app.graph.repositories.code_graph import CodeGraphRepository
 from app.parsers.registry import discover_source_files, language_support_for
@@ -50,6 +51,8 @@ class CodeGraphImportService:
         commit_hash: str,
         *,
         skip_repository_validation: bool = False,
+        persist_version_history: bool = True,
+        mark_missing_deleted: bool = True,
     ) -> CodeGraphImportResult:
         repository_path = repository_path.resolve()
         if not repository_path.is_dir():
@@ -78,10 +81,18 @@ class CodeGraphImportService:
             documents.append(support.map_to_graph(github_repository_id, file_result, commit_hash))
 
         document = resolve_cross_file_references(documents)
+        if not persist_version_history:
+            document = GraphDocument(
+                nodes=document.nodes,
+                edges=tuple(
+                    edge for edge in document.edges if edge.type != "INTRODUCED_IN"
+                ),
+            )
         skipped_external = self._graph_repository.save(
             document,
             github_repository_id=github_repository_id,
             commit_hash=commit_hash,
+            mark_missing_deleted=mark_missing_deleted,
         )
 
         counts = {node_type: 0 for node_type in _RESULT_NODE_TYPES}
