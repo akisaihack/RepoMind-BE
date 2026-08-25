@@ -100,8 +100,19 @@ class MethodHistoryIndexer:
                 current_methods = _method_versions(document)
                 deleted_method_keys.update(set(old_methods) - set(current_methods))
                 file_methods[change.path] = current_methods
+                introduced_version_ids = {
+                    version.id
+                    for method_key, version in current_methods.items()
+                    if method_key not in old_methods
+                    or old_methods[method_key].id != version.id
+                }
                 documents.append(
-                    _with_version_ancestry(document, current_methods, previous_versions)
+                    _with_version_ancestry(
+                        document,
+                        current_methods,
+                        previous_versions,
+                        introduced_version_ids,
+                    )
                 )
                 for method_key, version in current_methods.items():
                     if previous_versions.get(method_key, version).id != version.id:
@@ -117,6 +128,7 @@ class MethodHistoryIndexer:
                     github_repository_id=github_repository_id,
                     commit_hash=commit.sha,
                     mark_missing_deleted=False,
+                    resolve_introduction_history=False,
                 )
             self._graph_repository.mark_methods_deleted(
                 github_repository_id,
@@ -226,9 +238,14 @@ def _with_version_ancestry(
     document: GraphDocument,
     current: dict[str, GraphNode],
     previous: dict[str, GraphNode],
+    introduced_version_ids: set[str],
 ) -> GraphDocument:
     nodes = list(document.nodes)
-    edges = list(document.edges)
+    edges = [
+        edge
+        for edge in document.edges
+        if edge.type != "INTRODUCED_IN" or edge.source in introduced_version_ids
+    ]
     node_ids = {node.id for node in nodes}
     for method_key, current_version in current.items():
         previous_version = previous.get(method_key)
