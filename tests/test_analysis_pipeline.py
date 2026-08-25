@@ -59,6 +59,8 @@ def test_run_pipeline_success(service, mocks):
         github_repository_id=123,
         repository_path=mock_path,
         commit_hash="fakehash",
+        persist_version_history=False,
+        mark_missing_deleted=False,
     )
     mocks["method_history_indexer"].index.assert_called_once_with(
         github_repository_id=123,

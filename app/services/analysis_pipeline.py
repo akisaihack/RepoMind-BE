@@ -73,6 +73,8 @@ class AnalysisPipelineService:
                     github_repository_id=github_repo_id,
                     repository_path=repo_path,
                     commit_hash=commit_hash,
+                    persist_version_history=False,
+                    mark_missing_deleted=False,
                 )
                 
                 # 5. Import and embed chunks into pgvector
