@@ -2,8 +2,8 @@
 
 import re
 from collections.abc import Mapping
-from hashlib import sha256
 
+from app.ai.rag.evidence_ids import evidence_id
 from app.ai.rag.state import QAState, VectorHit
 from app.dtos.question import QuestionKind
 
@@ -120,7 +120,7 @@ def _code_evidence(
     excerpt = _excerpt_from(source_code, start_line, question)
     location = _code_location(path, excerpt["excerptStartLine"], excerpt["excerptEndLine"])
     return {
-        "id": _evidence_id("code", internal_id),
+        "id": evidence_id("code", internal_id),
         "type": "code",
         "title": title,
         "location": location,
@@ -186,7 +186,7 @@ def _commit_evidence(node: dict, metadata: Mapping) -> dict | None:
     details = [metadata.get("author"), metadata.get("committed_at")]
     description = " · ".join(value for value in details if isinstance(value, str) and value)
     return {
-        "id": _evidence_id("commit", node["id"]),
+        "id": evidence_id("commit", node["id"]),
         "type": "commit",
         "title": title,
         "location": sha,
@@ -324,8 +324,3 @@ def _deduplicate(items: list[dict]) -> list[dict]:
         seen.add(item_id)
         deduplicated.append(item)
     return deduplicated
-
-
-def _evidence_id(evidence_type: str, internal_id: str) -> str:
-    digest = sha256(internal_id.encode("utf-8")).hexdigest()[:16]
-    return f"evidence:{evidence_type}:{digest}"
