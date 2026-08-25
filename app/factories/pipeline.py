@@ -1,5 +1,7 @@
 """Factory for creating the AnalysisPipelineService and its complex dependency graph."""
 
+import logging
+
 from flask import current_app
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,8 @@ from app.services.github_history import GitHubHistoryCollector
 from app.services.github_history_import import GitHubHistoryImportService
 from app.services.method_history_index import MethodHistoryIndexer
 from app.services.repository_identity import RepositoryIdentityValidator
+
+logger = logging.getLogger(__name__)
 
 
 def create_analysis_pipeline(
@@ -97,6 +101,7 @@ def create_analysis_pipeline(
     chunk_import_service = ChunkImportService(
         chunk_repository=code_chunk_repo,
         embedding_service=embedding_service,
+        on_progress=lambda message: logger.info("코드 청크 처리: %s", message),
     )
     
     # 5. Assemble Pipeline

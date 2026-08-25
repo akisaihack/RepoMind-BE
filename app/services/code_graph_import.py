@@ -5,6 +5,7 @@ repository-scoped code graph.
 때 이 파일은 손댈 필요 없음(레지스트리를 통해서만 파서/매퍼를 찾음).
 """
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,8 @@ from app.graph.mappings import resolve_cross_file_references
 from app.graph.repositories.code_graph import CodeGraphRepository
 from app.parsers.registry import discover_source_files, language_support_for
 from app.services.repository_identity import RepositoryIdentity, RepositoryIdentityValidator
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,8 +72,9 @@ class CodeGraphImportService:
             self._on_identity_validated(identity)
 
         source_files = discover_source_files(repository_path)
+        logger.info("최신 소스 파일 파싱을 시작합니다. 전체=%s개", len(source_files))
         documents = []
-        for file_path in source_files:
+        for index, file_path in enumerate(source_files, start=1):
             support = language_support_for(file_path)
             if support is None:
                 # discover_source_files가 이미 지원 확장자만 걸러서 주기
@@ -79,7 +83,15 @@ class CodeGraphImportService:
             relative_path = file_path.relative_to(repository_path).as_posix()
             file_result = support.parse(relative_path, file_path.read_bytes())
             documents.append(support.map_to_graph(github_repository_id, file_result, commit_hash))
+            if index == 1 or index == len(source_files) or index % 25 == 0:
+                logger.info(
+                    "최신 소스 파일 파싱 진행률=%s/%s, 파일=%s",
+                    index,
+                    len(source_files),
+                    relative_path,
+                )
 
+        logger.info("파일 간 코드 참조 관계를 연결합니다. 파일=%s개", len(documents))
         document = resolve_cross_file_references(documents)
         if not persist_version_history:
             document = GraphDocument(
@@ -88,6 +100,11 @@ class CodeGraphImportService:
                     edge for edge in document.edges if edge.type != "INTRODUCED_IN"
                 ),
             )
+        logger.info(
+            "최신 코드 그래프를 Neo4j에 저장합니다. 노드=%s개, 관계=%s개",
+            len(document.nodes),
+            len(document.edges),
+        )
         skipped_external = self._graph_repository.save(
             document,
             github_repository_id=github_repository_id,
@@ -99,6 +116,15 @@ class CodeGraphImportService:
         for node in document.nodes:
             if node.type in counts:
                 counts[node.type] += 1
+
+        logger.info(
+            "최신 코드 그래프 저장을 완료했습니다. 파일=%s개, 메서드=%s개, "
+            "관계=%s개, 제외된 외부 관계=%s개",
+            counts["File"],
+            counts["Method"],
+            len(document.edges) - skipped_external,
+            skipped_external,
+        )
 
         return CodeGraphImportResult(
             github_repository_id=github_repository_id,
