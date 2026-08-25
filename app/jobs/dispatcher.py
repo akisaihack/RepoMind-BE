@@ -1,5 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
+from time import monotonic
 
 from app.dtos.analysis import AnalysisRequest
 
@@ -29,8 +30,10 @@ class NoOpAnalysisJobDispatcher(AnalysisJobDispatcher):
 
     def dispatch(self, request: AnalysisRequest) -> None:
         logger.info(
-            f"[NoOpDispatcher] Dispatched analysis job for repo '{request.repository_url}' "
-            f"(branch: {request.branch}, id: {request.repository_id})"
+            "분석 요청을 기록했습니다. URL=%s, 브랜치=%s, 저장소 ID=%s",
+            request.repository_url,
+            request.branch,
+            request.repository_id,
         )
 
 
@@ -51,7 +54,11 @@ class ThreadAnalysisJobDispatcher(AnalysisJobDispatcher):
             daemon=True,
         )
         thread.start()
-        logger.info(f"Dispatched background thread for {request.repository_url}")
+        logger.info(
+            "백그라운드 분석 작업을 생성했습니다. 저장소 ID=%s, URL=%s",
+            request.repository_id,
+            request.repository_url,
+        )
 
     def _run_job(self, request: AnalysisRequest) -> None:
         """Run the actual pipeline inside an application context."""
@@ -59,6 +66,12 @@ class ThreadAnalysisJobDispatcher(AnalysisJobDispatcher):
         from app.factories.pipeline import create_analysis_pipeline
 
         with self._app.app_context():
+            started_at = monotonic()
+            logger.info(
+                "백그라운드 분석 작업을 시작합니다. 저장소 ID=%s, 브랜치=%s",
+                request.repository_id,
+                request.branch,
+            )
             try:
                 pipeline = create_analysis_pipeline(
                     session=db.session,
@@ -69,5 +82,16 @@ class ThreadAnalysisJobDispatcher(AnalysisJobDispatcher):
                     repository_url=request.repository_url,
                     branch=request.branch,
                 )
+                logger.info(
+                    "백그라운드 분석 작업을 완료했습니다. 저장소 ID=%s, 소요 시간=%.2f초",
+                    request.repository_id,
+                    monotonic() - started_at,
+                )
             except Exception as exc:
-                logger.exception(f"Background thread failed for {request.repository_url}: {exc}")
+                logger.exception(
+                    "백그라운드 분석 작업에 실패했습니다. 저장소 ID=%s, "
+                    "소요 시간=%.2f초, 오류=%s",
+                    request.repository_id,
+                    monotonic() - started_at,
+                    exc,
+                )

@@ -10,6 +10,7 @@ load_dotenv(BASE_DIR / ".env")
 
 
 class BaseConfig:
+    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
     SECRET_KEY = os.getenv("SECRET_KEY", "development-only-secret")
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///repomind.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False

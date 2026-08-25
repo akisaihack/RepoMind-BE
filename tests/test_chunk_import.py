@@ -22,7 +22,7 @@ def test_reuses_existing_version_without_embedding_again(tmp_path) -> None:
     assert result.chunks == 1
     embedding_service.embed.assert_not_called()
     repository.upsert_chunks.assert_not_called()
-    assert any("reusing 1" in message for message in messages)
+    assert any("기존 버전 청크 1개 재사용" in message for message in messages)
 
 
 def test_embeds_only_new_method_versions(tmp_path) -> None:

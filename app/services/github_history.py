@@ -1,5 +1,6 @@
 """Collect and normalize GitHub repository development history."""
 
+import logging
 from typing import Any
 
 from app.clients.github import GitHubClient
@@ -14,6 +15,8 @@ from app.dtos.github import (
 )
 from app.services.github_references import extract_issue_references
 
+logger = logging.getLogger(__name__)
+
 
 class GitHubHistoryCollector:
     """Collect repository, branch, issue, pull request, and commit history."""
@@ -23,28 +26,52 @@ class GitHubHistoryCollector:
 
     def collect(self, branch: str) -> DevelopmentHistoryDTO:
         """Collect resources and commits reachable from the requested branch."""
+        logger.info("GitHub 데이터 수집을 시작합니다. 브랜치=%s", branch)
         repository = _to_repository(self._client.get_repository())
+        logger.info("GitHub 저장소 정보를 조회했습니다. 저장소=%s", repository.full_name)
         branches = tuple(_to_branch(item) for item in self._client.list_branches())
+        logger.info("GitHub 브랜치 목록을 조회했습니다. 브랜치=%s개", len(branches))
 
         issue_summaries = self._client.list_issues()
-        issues = tuple(
-            _to_issue(self._client.get_issue(item["number"])) for item in issue_summaries
-        )
+        logger.info("GitHub 이슈 상세 조회를 시작합니다. 전체=%s개", len(issue_summaries))
+        issues = []
+        for index, item in enumerate(issue_summaries, start=1):
+            issues.append(_to_issue(self._client.get_issue(item["number"])))
+            _log_progress("issues", index, len(issue_summaries))
 
-        pull_requests = tuple(
-            self._collect_pull_request(item["number"]) for item in self._client.list_pull_requests()
+        pull_request_summaries = self._client.list_pull_requests()
+        logger.info("GitHub PR 상세 조회를 시작합니다. 전체=%s개", len(pull_request_summaries))
+        pull_requests = []
+        for index, item in enumerate(pull_request_summaries, start=1):
+            pull_requests.append(self._collect_pull_request(item["number"]))
+            _log_progress("pull_requests", index, len(pull_request_summaries))
+
+        commit_summaries = self._client.list_commits(branch)
+        logger.info(
+            "GitHub 커밋 상세 조회를 시작합니다. 브랜치=%s, 전체=%s개",
+            branch,
+            len(commit_summaries),
         )
-        commits = tuple(
-            _to_commit(self._client.get_commit(item["sha"]))
-            for item in self._client.list_commits(branch)
+        commits = []
+        for index, item in enumerate(commit_summaries, start=1):
+            commits.append(_to_commit(self._client.get_commit(item["sha"])))
+            _log_progress("commits", index, len(commit_summaries))
+
+        logger.info(
+            "GitHub 데이터 수집을 완료했습니다. 브랜치=%s개, 이슈=%s개, PR=%s개, "
+            "커밋=%s개",
+            len(branches),
+            len(issues),
+            len(pull_requests),
+            len(commits),
         )
 
         return DevelopmentHistoryDTO(
             repository=repository,
             branches=branches,
-            issues=issues,
-            pull_requests=pull_requests,
-            commits=commits,
+            issues=tuple(issues),
+            pull_requests=tuple(pull_requests),
+            commits=tuple(commits),
         )
 
     def _collect_pull_request(self, number: int) -> PullRequestDTO:
@@ -52,6 +79,12 @@ class GitHubHistoryCollector:
         commits = self._client.list_pull_request_commits(number)
         files = self._client.list_pull_request_files(number)
         return _to_pull_request(pull_request, commits, files)
+
+
+def _log_progress(resource: str, current: int, total: int) -> None:
+    if current == 1 or current == total or current % 10 == 0:
+        labels = {"issues": "이슈", "pull_requests": "PR", "commits": "커밋"}
+        logger.info("GitHub %s 조회 진행률=%s/%s", labels[resource], current, total)
 
 
 def _to_repository(data: dict[str, Any]) -> RepositoryDTO:

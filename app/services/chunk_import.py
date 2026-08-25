@@ -67,7 +67,7 @@ class ChunkImportService:
             raise ValueError("commit_hash must not be empty.")
 
         source_files = discover_source_files(repository_path)
-        self._on_progress(f"parsing {len(source_files)} source files...")
+        self._on_progress(f"소스 파일 {len(source_files)}개 파싱 시작")
         chunks: list[CodeChunk] = []
         for index, file_path in enumerate(source_files, start=1):
             support = language_support_for(file_path)
@@ -80,7 +80,8 @@ class ChunkImportService:
             file_chunks = build_chunks_from_file(github_repository_id, file_result, commit_hash)
             chunks.extend(file_chunks)
             self._on_progress(
-                f"[{index}/{len(source_files)}] {relative_path}: {len(file_chunks)} chunks"
+                f"파일 파싱 진행률={index}/{len(source_files)}, 파일={relative_path}, "
+                f"청크={len(file_chunks)}개"
             )
 
         existing_ids = self._chunk_repository.find_existing_graph_node_ids(
@@ -88,16 +89,16 @@ class ChunkImportService:
         )
         new_chunks = [chunk for chunk in chunks if chunk.graph_node_id not in existing_ids]
         if existing_ids:
-            self._on_progress(f"reusing {len(existing_ids)} existing version chunks.")
+            self._on_progress(f"기존 버전 청크 {len(existing_ids)}개 재사용")
 
         if new_chunks:
-            self._on_progress(f"embedding {len(new_chunks)} new version chunks via Azure OpenAI...")
+            self._on_progress(f"신규 버전 청크 {len(new_chunks)}개 임베딩 시작")
             embeddings = self._embed_all(chunk.text for chunk in new_chunks)
-            self._on_progress("writing chunks + embeddings to pgvector...")
+            self._on_progress("청크와 임베딩을 pgvector에 저장 중")
             self._chunk_repository.upsert_chunks(new_chunks, embeddings)
-            self._on_progress("pgvector write complete.")
+            self._on_progress("pgvector 저장 완료")
         else:
-            self._on_progress("no new code versions found, nothing to embed.")
+            self._on_progress("새로운 코드 버전이 없어 임베딩을 생략합니다.")
 
         return ChunkImportResult(
             github_repository_id=github_repository_id,
@@ -116,6 +117,8 @@ class ChunkImportService:
         starts = range(0, len(text_list), self._embedding_batch_size)
         for batch_index, start in enumerate(starts, 1):
             batch = text_list[start : start + self._embedding_batch_size]
-            self._on_progress(f"  embedding batch {batch_index}/{batch_count} ({len(batch)} texts)")
+            self._on_progress(
+                f"임베딩 진행률={batch_index}/{batch_count}, 텍스트={len(batch)}개"
+            )
             embeddings.extend(self._embedding_service.embed(batch))
         return embeddings
