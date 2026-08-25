@@ -1,10 +1,15 @@
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from app.services.git_clone import GitCloneError, GitCloneService
+from app.services.git_clone import (
+    GitCloneError,
+    GitCloneService,
+    GitCommit,
+    GitHistoryLimitError,
+)
 
 
 @pytest.fixture
@@ -25,6 +30,7 @@ def test_clone_success(service):
             assert "clone" in args[0]
             assert "https://github.com/owner/repo.git" in args[0]
             assert "main" in args[0]
+            assert "--depth" not in args[0]
             assert kwargs["cwd"] == path
             assert kwargs["check"] is True
 
@@ -73,3 +79,59 @@ def test_get_commit_hash_failure(service):
         
         with pytest.raises(GitCloneError, match="fatal: not a git repository"):
             service.get_commit_hash(Path("/fake/repo"))
+
+
+def test_lists_first_parent_commits_after_checkpoint(service):
+    history = "aaa\nbbb aaa\nccc bbb\n"
+    with patch("app.services.git_clone.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=history
+        )
+
+        commits = service.list_first_parent_commits(
+            Path("/fake/repo"), after_sha="aaa"
+        )
+
+    assert commits == [
+        GitCommit("bbb", "aaa"),
+        GitCommit("ccc", "bbb"),
+    ]
+
+
+def test_rejects_history_beyond_configured_limit(service):
+    with patch("app.services.git_clone.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="aaa\nbbb aaa\n"
+        )
+
+        with pytest.raises(GitHistoryLimitError):
+            service.list_first_parent_commits(Path("/fake/repo"), max_commits=1)
+
+
+def test_parses_modified_deleted_and_renamed_files(service):
+    output = b"M\0src/App.java\0D\0src/Old.java\0R100\0src/A.java\0src/B.java\0"
+    with patch("app.services.git_clone.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=output
+        )
+
+        changes = service.list_changed_files(
+            Path("/fake/repo"), GitCommit("bbb", "aaa")
+        )
+
+    assert [(item.status, item.previous_path, item.path) for item in changes] == [
+        ("M", None, "src/App.java"),
+        ("D", None, "src/Old.java"),
+        ("R", "src/A.java", "src/B.java"),
+    ]
+
+
+def test_reads_files_from_git_objects(service):
+    with patch("app.services.git_clone.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"class App {}"
+        )
+
+        content = service.read_file_at_commit(Path("/fake/repo"), "abc", "src/App.java")
+
+    assert content == b"class App {}"
