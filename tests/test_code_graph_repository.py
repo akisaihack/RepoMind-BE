@@ -10,6 +10,8 @@ from app.graph.repositories.code_graph import (
     CodeGraphPersistenceError,
     CodeGraphRepository,
     CodeGraphValidationError,
+    _introduced_in_query,
+    _mark_deleted_methods_query,
 )
 
 
@@ -161,6 +163,42 @@ def test_marks_only_selected_methods_deleted() -> None:
     call = transaction.run.call_args
     assert "UNWIND $methodKeys" in call.args[0]
     assert call.kwargs["methodKeys"] == ["method:one"]
+
+
+def test_history_write_queries_do_not_materialize_unbounded_paths() -> None:
+    for query in (_introduced_in_query(), _mark_deleted_methods_query()):
+        assert "MATCH path" not in query
+        assert "introPath" not in query
+        assert "deletePath" not in query
+        assert "length(" not in query
+        assert "EXISTS {" in query
+
+
+def test_pre_resolved_introduction_is_saved_without_ancestry_traversal() -> None:
+    client, transaction = _transactional_client()
+    method = GraphNode("method:a", "Method", {})
+    version = GraphNode("version:a", "MethodVersion", {})
+    commit = GraphNode("commit:a", "Commit", {})
+    document = GraphDocument(
+        (method, version, commit),
+        (
+            GraphEdge("HAS_VERSION", method.id, version.id, {}),
+            GraphEdge("INTRODUCED_IN", version.id, commit.id, {}),
+        ),
+    )
+
+    CodeGraphRepository(client).save(
+        document,
+        resolve_introduction_history=False,
+    )
+
+    introduction_query = next(
+        call.args[0]
+        for call in transaction.run.call_args_list
+        if "relation:INTRODUCED_IN" in call.args[0]
+    )
+    assert "PARENT*0.." not in introduction_query
+    assert "MERGE (source)-[relation:INTRODUCED_IN]->(target)" in introduction_query
 
 
 def test_resolves_nearest_method_version_and_deleted_state() -> None:

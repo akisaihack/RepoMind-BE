@@ -36,10 +36,31 @@ def test_adds_derived_from_only_when_method_content_changes() -> None:
         document,
         {"method:a": document.nodes[1]},
         {"method:a": previous},
+        {"version:new"},
     )
 
     assert previous in result.nodes
     assert GraphEdge("DERIVED_FROM", "version:new", "version:old", {}) in result.edges
+
+
+def test_keeps_introduction_only_for_versions_changed_in_current_commit() -> None:
+    document = _version("method:a", "version:current")
+
+    unchanged = _with_version_ancestry(
+        document,
+        {"method:a": document.nodes[1]},
+        {"method:a": document.nodes[1]},
+        set(),
+    )
+    introduced = _with_version_ancestry(
+        document,
+        {"method:a": document.nodes[1]},
+        {},
+        {"version:current"},
+    )
+
+    assert all(edge.type != "INTRODUCED_IN" for edge in unchanged.edges)
+    assert any(edge.type == "INTRODUCED_IN" for edge in introduced.edges)
 
 
 def test_preserves_first_parent_commit_chain() -> None:
@@ -66,6 +87,13 @@ def test_indexes_changed_files_and_explicit_deletions(monkeypatch) -> None:
     result = indexer.index(1, Path("/repo"), after_sha="parent")
 
     graph.mark_methods_deleted.assert_called_once_with(1, "head", ["method:deleted"])
+    graph.save.assert_called_once_with(
+        graph.save.call_args.args[0],
+        github_repository_id=1,
+        commit_hash="head",
+        mark_missing_deleted=False,
+        resolve_introduction_history=False,
+    )
     assert result.commits == 1
     assert result.versions == 1
     assert result.deletions == 1

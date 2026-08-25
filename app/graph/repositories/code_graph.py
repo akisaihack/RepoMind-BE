@@ -56,6 +56,7 @@ class CodeGraphRepository:
         github_repository_id: int | None = None,
         commit_hash: str | None = None,
         mark_missing_deleted: bool = True,
+        resolve_introduction_history: bool = True,
     ) -> int:
         """MERGE internal graph nodes and edges; return skipped external edge count."""
         if (github_repository_id is None) != (commit_hash is None):
@@ -90,7 +91,13 @@ class CodeGraphRepository:
                     transaction.run(_node_query(label), rows=batch).consume()
             for labels, rows in relationship_batches.items():
                 for batch in _batches(rows, self._batch_size):
-                    transaction.run(_relationship_query(*labels), rows=batch).consume()
+                    transaction.run(
+                        _relationship_query(
+                            *labels,
+                            resolve_introduction_history=resolve_introduction_history,
+                        ),
+                        rows=batch,
+                    ).consume()
             if (
                 mark_missing_deleted
                 and github_repository_id is not None
@@ -201,8 +208,14 @@ SET node += row.properties
 """
 
 
-def _relationship_query(source_label: str, relationship: str, target_label: str) -> str:
-    if relationship == "INTRODUCED_IN":
+def _relationship_query(
+    source_label: str,
+    relationship: str,
+    target_label: str,
+    *,
+    resolve_introduction_history: bool = True,
+) -> str:
+    if relationship == "INTRODUCED_IN" and resolve_introduction_history:
         return _introduced_in_query()
     return f"""
 UNWIND $rows AS row
@@ -221,11 +234,17 @@ MATCH (target:Commit {key: row.toKey})
 MATCH (method:Method)-[:HAS_VERSION]->(source)
 WHERE NOT EXISTS {
   MATCH (source)-[:INTRODUCED_IN]->(introduced:Commit)
-  MATCH introPath = (target)-[:PARENT*0..]->(introduced)
-  WHERE NOT EXISTS {
+  WHERE EXISTS {
+    MATCH (target)-[:PARENT*0..]->(introduced)
+  }
+  AND NOT EXISTS {
     MATCH (method)-[:DELETED_IN]->(deleted:Commit)
-    MATCH deletePath = (target)-[:PARENT*0..]->(deleted)
-    WHERE length(deletePath) < length(introPath)
+    WHERE EXISTS {
+      MATCH (target)-[:PARENT*0..]->(deleted)
+    }
+    AND EXISTS {
+      MATCH (deleted)-[:PARENT*0..]->(introduced)
+    }
   }
 }
 MERGE (source)-[relation:INTRODUCED_IN]->(target)
@@ -239,19 +258,21 @@ MATCH (commit:Commit {key: $commitKey})
 MATCH (method:Method {githubRepositoryId: $repositoryId})
 WHERE NOT method.key IN $activeMethodKeys
   AND EXISTS { (method)-[:HAS_VERSION]->(:MethodVersion) }
-CALL (commit, method) {
+  AND EXISTS {
   MATCH (method)-[:HAS_VERSION]->(:MethodVersion)-[:INTRODUCED_IN]->(introduced:Commit)
-  MATCH path = (commit)-[:PARENT*0..]->(introduced)
-  RETURN 'version' AS eventType, length(path) AS distance
-  UNION ALL
-  MATCH (method)-[:DELETED_IN]->(deleted:Commit)
-  MATCH path = (commit)-[:PARENT*0..]->(deleted)
-  RETURN 'deleted' AS eventType, length(path) AS distance
-}
-WITH commit, method, eventType, distance
-ORDER BY method.key, distance
-WITH commit, method, head(collect(eventType)) AS nearestEvent
-WHERE nearestEvent = 'version'
+  WHERE EXISTS {
+    MATCH (commit)-[:PARENT*0..]->(introduced)
+  }
+  AND NOT EXISTS {
+    MATCH (method)-[:DELETED_IN]->(deleted:Commit)
+    WHERE EXISTS {
+      MATCH (commit)-[:PARENT*0..]->(deleted)
+    }
+    AND EXISTS {
+      MATCH (deleted)-[:PARENT*0..]->(introduced)
+    }
+  }
+  }
 MERGE (method)-[:DELETED_IN]->(commit)
 """
 
