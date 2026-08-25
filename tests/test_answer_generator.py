@@ -201,7 +201,11 @@ def test_history_answer_prompt_distinguishes_facts_from_inference() -> None:
 
     assert result.summary == "로그인 검증이 추가됐습니다."
     assert "commit.message에 변경 이유가 명시된 경우에만" in received[0]
-    assert "최초 도입 커밋이라고 단정하지 마세요" in received[0]
+    assert "대상 브랜치의 first-parent Git 이력 범위" in received[0]
+    assert "실제 최초 Git 도입 커밋을 확인할 수 없다" in received[0]
+    assert "일반적인 주의 문구를 uncertainties에 추가하지 마세요" in received[0]
     assert "INTRODUCED_IN" in received[0]
     assert "HTML entity를 생성하지 마세요" in received[0]
+    assert "앞 7자리만 표시하세요" in received[0]
+    assert "읽기 쉬운 날짜로 표현하세요" in received[0]
     assert '"added_lines":["validate();"]' in received[0]
