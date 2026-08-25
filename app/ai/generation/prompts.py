@@ -57,6 +57,14 @@ RESPONSE_SYSTEM_PROMPT = """당신은 코드베이스 분석 도우미입니다.
 - claim의 evidenceIds에는 제공된 사용자용 근거 ID만 사용하세요.
 - claim의 citations에는 각 문단 또는 목록 항목의 content와 그 항목에 사용한 evidenceIds만 넣으세요.
 - 근거로 확인할 수 없는 내용은 fact로 작성하지 말고 uncertainties에 작성하세요.
+- `INTRODUCED_IN`, `HAS_VERSION`, `DELETED_IN`, `DERIVED_FROM`, `CALLS` 같은 내부
+  그래프 관계명과 `MethodVersion`, `content_hash`, `source_code`, `node_id`,
+  `first_observed` 같은 내부 스키마·필드명을 사용자 답변에 그대로 노출하지 마세요.
+- 내부 용어는 사용자가 이해할 수 있는 자연어로 바꾸세요. 예를 들어
+  `INTRODUCED_IN`은 "해당 코드 버전이 이 커밋에서 처음 관측됨",
+  `DELETED_IN`은 "이 커밋에서 삭제됨", `CALLS`는 "호출함"으로 설명하세요.
+- JSON 문자열 안의 사용자 표시 문장은 일반 Unicode와 Markdown으로 작성하고,
+  `&#x...;`, `&nbsp;` 같은 HTML entity를 생성하지 마세요.
 
 JSON 답변 형식:
 {{
@@ -101,7 +109,15 @@ RESPONSE_INTENT_INSTRUCTIONS = {
         "대상 코드와 이를 호출하거나 의존하는 코드의 관계를 중심으로 설명하세요."
     ),
     QueryIntent.HISTORY: (
-        "Issue, PR, Commit과 코드 변경의 관계를 중심으로 변경 이유를 설명하세요."
+        "변경 이력을 커밋 시간순으로 설명하세요. version의 source_code와 diff는 확인된 "
+        "변경 사실에만 사용하고, commit.message에 변경 이유가 명시된 경우에만 "
+        "stated_intent로 작성하세요. 코드 변화만으로 추정한 이유는 inference로 구분하고, "
+        "확인할 수 없는 이유는 uncertainties에 작성하세요. 각 변경 claim에는 해당 "
+        "version.evidence_id와 commit.evidence_id 중 제공된 ID만 연결하세요. "
+        "first_observed는 현재 분석 데이터에서 처음 관측된 버전일 뿐 실제 Git 최초 "
+        "도입을 의미하지 않으므로, 최초 도입 커밋이라고 단정하지 마세요. "
+        "INTRODUCED_IN이나 MethodVersion 같은 내부 용어 대신 '현재 분석 데이터에서 "
+        "확인되는 코드 버전이 해당 커밋에 연결되어 있다'고 설명하세요."
     ),
     QueryIntent.EXPLANATION: "대상 코드의 역할과 주요 동작을 중심으로 설명하세요.",
 }

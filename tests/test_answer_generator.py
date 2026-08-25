@@ -6,6 +6,7 @@ from langchain_core.runnables import RunnableLambda
 
 from app.ai.answer_generator import AnswerGenerator
 from app.ai.generation.context_builder import LLMContextBuilder
+from app.dtos.response_generation import QueryIntent
 from app.sample.mock_response_generation import get_mock_response_generation_input
 
 
@@ -147,3 +148,60 @@ def test_answer_generator_falls_back_when_provider_returns_plain_text() -> None:
     assert result.claims[0].kind == "inference"
     assert result.claims[0].evidence_ids == []
     assert result.uncertainties
+
+
+def test_history_answer_prompt_distinguishes_facts_from_inference() -> None:
+    received = []
+    input_data = get_mock_response_generation_input()
+    input_data.intent = QueryIntent.HISTORY
+    input_data.context.history = [
+        {
+            "method": "AuthController.authenticateUser",
+            "change_type": "modified",
+            "version": {
+                "node_id": "version:2",
+                "method_key": "method:authenticate",
+                "symbol": "AuthController.authenticateUser(LoginRequest)",
+                "source_code": "validate();",
+                "start_line": 20,
+                "end_line": 25,
+                "content_hash": "hash-2",
+            },
+            "commit": {
+                "node_id": "commit:2",
+                "sha": "def456",
+                "message": "fix: 로그인 검증 추가",
+                "committed_at": "2026-08-10T10:00:00Z",
+            },
+            "diff": {"added_lines": ["validate();"], "removed_lines": []},
+        }
+    ]
+
+    def answer(prompt):
+        received.append(prompt.to_string())
+        return json.dumps(
+            {
+                "summary": "로그인 검증이 추가됐습니다.",
+                "claims": [
+                    {
+                        "id": "claim-1",
+                        "kind": "stated_intent",
+                        "title": "로그인 검증 추가",
+                        "content": "커밋에서 검증 코드가 추가됐습니다.",
+                        "evidenceIds": [],
+                        "citations": [],
+                    }
+                ],
+                "uncertainties": [],
+            },
+            ensure_ascii=False,
+        )
+
+    result = AnswerGenerator(RunnableLambda(answer)).generate(input_data)
+
+    assert result.summary == "로그인 검증이 추가됐습니다."
+    assert "commit.message에 변경 이유가 명시된 경우에만" in received[0]
+    assert "최초 도입 커밋이라고 단정하지 마세요" in received[0]
+    assert "INTRODUCED_IN" in received[0]
+    assert "HTML entity를 생성하지 마세요" in received[0]
+    assert '"added_lines":["validate();"]' in received[0]
