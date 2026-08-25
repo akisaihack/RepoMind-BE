@@ -1,11 +1,15 @@
 """Git repository clone service for analysis jobs."""
 
+import logging
 import subprocess
 import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
+
+logger = logging.getLogger(__name__)
 
 
 class GitCloneError(Exception):
@@ -51,6 +55,8 @@ class GitCloneService:
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
+            started_at = monotonic()
+            logger.info("Git clone을 시작합니다. 브랜치=%s", branch)
             try:
                 subprocess.run(
                     [
@@ -69,6 +75,12 @@ class GitCloneService:
                 )
             except subprocess.CalledProcessError as exc:
                 raise GitCloneError(f"Failed to clone repository: {exc.stderr}") from exc
+
+            logger.info(
+                "Git clone을 완료했습니다. 브랜치=%s, 소요 시간=%.2f초",
+                branch,
+                monotonic() - started_at,
+            )
 
             yield temp_path
 
@@ -106,6 +118,11 @@ class GitCloneService:
             raise GitHistoryLimitError(
                 f"Commit history exceeds configured limit ({max_commits})."
             )
+        logger.info(
+            "Git first-parent 커밋 목록을 조회했습니다. 처리 대상=%s개, 체크포인트=%s",
+            len(commits),
+            after_sha or "none",
+        )
         return commits
 
     def list_changed_files(

@@ -137,7 +137,8 @@ class MethodHistoryIndexer:
             )
             deletion_count += len(deleted_method_keys)
             logger.info(
-                "Indexed method history commit %s/%s sha=%s files=%s versions=%s deletions=%s",
+                "메서드 이력 인덱싱 진행률=%s/%s, 커밋=%s, 변경 파일=%s개, "
+                "누적 버전=%s개, 누적 삭제=%s개",
                 position,
                 len(commits),
                 commit.sha,
