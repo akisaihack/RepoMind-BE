@@ -36,8 +36,9 @@ def test_persists_file_changes_before_mapping_and_graph_save() -> None:
         file_repository,
         mapper,
         graph_repository,
-    ).import_history()
+    ).import_history("develop")
 
+    collector.collect.assert_called_once_with("develop")
     file_repository.upsert_changes.assert_called_once_with(100, ())
     mapper.map.assert_called_once_with(history, {("abc123", "app.py"): 105})
     graph_repository.save.assert_called_once_with(graph_data)

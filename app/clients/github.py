@@ -115,8 +115,14 @@ class GitHubClient:
     def list_pull_request_files(self, number: int) -> list[dict[str, Any]]:
         return self._get_paginated(f"{self._repository_path}/pulls/{number}/files")
 
-    def list_commits(self) -> list[dict[str, Any]]:
-        return self._get_paginated(f"{self._repository_path}/commits")
+    def list_commits(self, branch: str) -> list[dict[str, Any]]:
+        """List every commit reachable from the requested branch."""
+        if not branch.strip():
+            raise ValueError("GitHub commit branch must not be empty.")
+        return self._get_paginated(
+            f"{self._repository_path}/commits",
+            {"sha": branch},
+        )
 
     def get_commit(self, sha: str) -> dict[str, Any]:
         path = f"{self._repository_path}/commits/{sha}"

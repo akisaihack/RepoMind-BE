@@ -21,6 +21,8 @@ ALLOWED_RELATIONSHIP_TYPES = frozenset(
         "HTTP_CALLS",
         "HAS_VERSION",
         "INTRODUCED_IN",
+        "DERIVED_FROM",
+        "PARENT",
         "DELETED_IN",
         "EXTENDS",
         "IMPLEMENTS",
@@ -53,6 +55,7 @@ class CodeGraphRepository:
         *,
         github_repository_id: int | None = None,
         commit_hash: str | None = None,
+        mark_missing_deleted: bool = True,
     ) -> int:
         """MERGE internal graph nodes and edges; return skipped external edge count."""
         if (github_repository_id is None) != (commit_hash is None):
@@ -88,7 +91,11 @@ class CodeGraphRepository:
             for labels, rows in relationship_batches.items():
                 for batch in _batches(rows, self._batch_size):
                     transaction.run(_relationship_query(*labels), rows=batch).consume()
-            if github_repository_id is not None and commit_hash is not None:
+            if (
+                mark_missing_deleted
+                and github_repository_id is not None
+                and commit_hash is not None
+            ):
                 method_keys = [node.id for node in nodes_by_id.values() if node.type == "Method"]
                 transaction.run(
                     _mark_deleted_methods_query(),
@@ -103,6 +110,29 @@ class CodeGraphRepository:
             raise CodeGraphPersistenceError("Failed to persist source-code graph.") from exc
 
         return skipped_external
+
+    def mark_methods_deleted(
+        self,
+        github_repository_id: int,
+        commit_hash: str,
+        method_keys: list[str],
+    ) -> None:
+        """Record deletion only for methods proven absent in a changed file."""
+        if not method_keys:
+            return
+
+        def _mark(transaction: ManagedTransaction) -> None:
+            transaction.run(
+                _mark_selected_methods_deleted_query(),
+                repositoryId=github_repository_id,
+                commitKey=f"{github_repository_id}:commit:{commit_hash}",
+                methodKeys=method_keys,
+            ).consume()
+
+        try:
+            self._client.execute_write(_mark)
+        except Neo4jError as exc:
+            raise CodeGraphPersistenceError("Failed to persist method deletion history.") from exc
 
     def find_method_version_at_commit(
         self,
@@ -222,6 +252,15 @@ WITH commit, method, eventType, distance
 ORDER BY method.key, distance
 WITH commit, method, head(collect(eventType)) AS nearestEvent
 WHERE nearestEvent = 'version'
+MERGE (method)-[:DELETED_IN]->(commit)
+"""
+
+
+def _mark_selected_methods_deleted_query() -> str:
+    return """
+MATCH (commit:Commit {key: $commitKey})
+UNWIND $methodKeys AS methodKey
+MATCH (method:Method {key: methodKey, githubRepositoryId: $repositoryId})
 MERGE (method)-[:DELETED_IN]->(commit)
 """
 

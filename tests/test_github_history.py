@@ -67,7 +67,8 @@ class SampleGitHubClient:
     def list_pull_request_files(self, number: int) -> list[dict[str, Any]]:
         return [self._file()]
 
-    def list_commits(self) -> list[dict[str, Any]]:
+    def list_commits(self, branch: str) -> list[dict[str, Any]]:
+        assert branch == "develop"
         return [{"sha": "abc123"}]
 
     def get_commit(self, sha: str) -> dict[str, Any]:
@@ -100,7 +101,9 @@ class SampleGitHubClient:
 
 
 def test_collects_sample_repository_development_history() -> None:
-    history = GitHubHistoryCollector(SampleGitHubClient()).collect()  # type: ignore[arg-type]
+    history = GitHubHistoryCollector(SampleGitHubClient()).collect(  # type: ignore[arg-type]
+        "develop"
+    )
 
     assert history.repository.full_name == "octocat/Hello-World"
     assert history.branches[0].sha == "abc123"
