@@ -65,6 +65,11 @@ RESPONSE_SYSTEM_PROMPT = """당신은 코드베이스 분석 도우미입니다.
   `DELETED_IN`은 "이 커밋에서 삭제됨", `CALLS`는 "호출함"으로 설명하세요.
 - JSON 문자열 안의 사용자 표시 문장은 일반 Unicode와 Markdown으로 작성하고,
   `&#x...;`, `&nbsp;` 같은 HTML entity를 생성하지 마세요.
+- 커밋을 본문에서 언급할 때는 40자리 SHA 전체를 노출하지 말고 `커밋 0e8bdc2`처럼
+  앞 7자리만 표시하세요. 커밋 URL이 제공된 경우 [`0e8bdc2`](커밋 URL) 형태의
+  Markdown 링크를 사용할 수 있습니다.
+- `2018-05-02T21:07:54Z` 같은 ISO 날짜는 특별히 시간이 중요한 질문이 아니라면
+  `2018년 5월 2일`처럼 읽기 쉬운 날짜로 표현하세요.
 
 JSON 답변 형식:
 {{
@@ -114,10 +119,14 @@ RESPONSE_INTENT_INSTRUCTIONS = {
         "stated_intent로 작성하세요. 코드 변화만으로 추정한 이유는 inference로 구분하고, "
         "확인할 수 없는 이유는 uncertainties에 작성하세요. 각 변경 claim에는 해당 "
         "version.evidence_id와 commit.evidence_id 중 제공된 ID만 연결하세요. "
-        "first_observed는 현재 분석 데이터에서 처음 관측된 버전일 뿐 실제 Git 최초 "
-        "도입을 의미하지 않으므로, 최초 도입 커밋이라고 단정하지 마세요. "
-        "INTRODUCED_IN이나 MethodVersion 같은 내부 용어 대신 '현재 분석 데이터에서 "
-        "확인되는 코드 버전이 해당 커밋에 연결되어 있다'고 설명하세요."
+        "first_observed가 제공되면 대상 브랜치의 first-parent Git 이력 범위에서 확인된 "
+        "최초 도입 커밋으로 설명하세요. 이 근거가 있는데도 '실제 최초 Git 도입 "
+        "커밋을 확인할 수 없다'거나 '분석 시점에 처음 관측됐을 뿐이다'라는 일반적인 "
+        "주의 문구를 uncertainties에 추가하지 마세요. 다만 전체 이력이 누락·제한됐다는 "
+        "명시적 정보가 있거나 first_observed가 제공되지 않은 경우에만 확인 가능한 이력 "
+        "범위를 설명하세요. 저장소의 모든 브랜치를 포함한 최초 도입으로 확대 해석하지 "
+        "마세요. INTRODUCED_IN이나 MethodVersion 같은 내부 용어 대신 '대상 브랜치 "
+        "이력에서 해당 코드가 이 커밋에 처음 도입됐다'고 설명하세요."
     ),
     QueryIntent.EXPLANATION: "대상 코드의 역할과 주요 동작을 중심으로 설명하세요.",
 }

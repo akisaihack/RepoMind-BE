@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
@@ -93,14 +94,15 @@ def _parse_and_validate_answer(raw_answer: str, evidence: list[Any]) -> Generate
         parsed = GeneratedAnswer.model_validate_json(_strip_json_fence(raw_answer))
     except Exception:
         logger.warning("Answer provider returned non-structured output; using safe fallback.")
+        normalized_answer = _normalize_display_text(raw_answer.strip())
         return GeneratedAnswer(
-            summary=raw_answer.strip(),
+            summary=normalized_answer,
             claims=[
                 GeneratedClaim(
                     id="claim-1",
                     kind="inference",
                     title="답변",
-                    content=raw_answer.strip(),
+                    content=normalized_answer,
                     evidenceIds=[],
                 )
             ],
@@ -143,7 +145,59 @@ def _parse_and_validate_answer(raw_answer: str, evidence: list[Any]) -> Generate
                 },
             )
         )
-    return parsed.model_copy(update={"claims": claims})
+    normalized_claims = [
+        claim.model_copy(
+            update={
+                "title": _normalize_display_text(claim.title),
+                "content": _normalize_display_text(claim.content),
+                "citations": [
+                    citation.model_copy(
+                        update={"content": _normalize_display_text(citation.content)}
+                    )
+                    for citation in claim.citations
+                ],
+            }
+        )
+        for claim in claims
+    ]
+    return parsed.model_copy(
+        update={
+            "summary": _normalize_display_text(parsed.summary),
+            "claims": normalized_claims,
+            "uncertainties": [
+                _normalize_display_text(item) for item in parsed.uncertainties
+            ],
+        }
+    )
+
+
+_NUMERIC_HTML_ENTITY = re.compile(r"&#(?:x([0-9a-fA-F]+)|([0-9]+));")
+_ISO_UTC_TIMESTAMP = re.compile(
+    r"\b(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b"
+)
+_FULL_COMMIT_SHA = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{40})(?![0-9a-fA-F])")
+_UNSAFE_DECODED_CHARACTERS = frozenset("<>&\"'")
+
+
+def _normalize_display_text(value: str) -> str:
+    """Normalize LLM-authored display text without changing evidence source data."""
+
+    def decode_entity(match: re.Match[str]) -> str:
+        codepoint = int(match.group(1) or match.group(2), 16 if match.group(1) else 10)
+        try:
+            decoded = chr(codepoint)
+        except ValueError:
+            return match.group(0)
+        return match.group(0) if decoded in _UNSAFE_DECODED_CHARACTERS else decoded
+
+    normalized = _ISO_UTC_TIMESTAMP.sub(
+        lambda match: (
+            f"{int(match.group(1))}년 {int(match.group(2))}월 {int(match.group(3))}일"
+        ),
+        value,
+    )
+    normalized = _NUMERIC_HTML_ENTITY.sub(decode_entity, normalized).replace("&nbsp;", " ")
+    return _FULL_COMMIT_SHA.sub(lambda match: match.group(1)[:7], normalized)
 
 
 def _strip_json_fence(value: str) -> str:
