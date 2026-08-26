@@ -21,7 +21,7 @@ _MAX_EXCERPT_LINES = 30
 _MAX_EVIDENCE_BY_QUESTION_KIND = {
     QuestionKind.FLOW: 5,
     QuestionKind.IMPACT: 5,
-    QuestionKind.INTENT: 4,
+    QuestionKind.INTENT: 8,
     QuestionKind.LOCATION: 5,
 }
 _QUESTION_KEYWORD_PATTERNS = {
@@ -61,7 +61,13 @@ def fuse_evidence(state: QAState) -> dict:
     )
 
     if question_kind is QuestionKind.INTENT:
-        evidence.extend(_history_evidence(graph_nodes, state["question"]))
+        evidence.extend(
+            _history_evidence(
+                graph_nodes,
+                graph_results.get("edges", []),
+                state["question"],
+            )
+        )
 
     deduplicated = _deduplicate(evidence)
     return {"evidence": deduplicated[:_MAX_EVIDENCE_BY_QUESTION_KIND[question_kind]]}
@@ -136,8 +142,11 @@ def _code_evidence(
     }
 
 
-def _history_evidence(nodes: list[dict], question: str) -> list[dict]:
+def _history_evidence(
+    nodes: list[dict], edges: list[dict], question: str
+) -> list[dict]:
     evidence: list[dict] = []
+    issue_relations = _issue_relations(edges)
     for node in nodes:
         metadata = node.get("metadata")
         if not isinstance(metadata, Mapping):
@@ -147,11 +156,32 @@ def _history_evidence(nodes: list[dict], question: str) -> list[dict]:
             item = _method_version_evidence(node, metadata, question)
         elif node_type == "Commit":
             item = _commit_evidence(node, metadata)
+        elif node_type == "PullRequest":
+            item = _work_item_evidence(node, metadata, "Pull Request")
+        elif node_type == "Issue":
+            item = _work_item_evidence(
+                node,
+                metadata,
+                "Issue",
+                relation=issue_relations.get(node.get("id")),
+            )
         else:
             item = None
         if item is not None:
             evidence.append(item)
     return evidence
+
+
+def _issue_relations(edges: list[dict]) -> dict[object, str]:
+    relations: dict[object, str] = {}
+    for edge in edges:
+        relation = edge.get("type")
+        target = edge.get("target")
+        if relation not in {"RESOLVES", "REFERENCES"}:
+            continue
+        if relations.get(target) != "RESOLVES":
+            relations[target] = relation
+    return relations
 
 
 def _method_version_evidence(
@@ -192,6 +222,37 @@ def _commit_evidence(node: dict, metadata: Mapping) -> dict | None:
         "location": sha,
         "description": description or title,
         "excerpt": None,
+    }
+
+
+def _work_item_evidence(
+    node: dict,
+    metadata: Mapping,
+    item_type: str,
+    *,
+    relation: str | None = None,
+) -> dict | None:
+    number = metadata.get("number")
+    title = metadata.get("title")
+    if not isinstance(number, int) or not isinstance(title, str) or not title.strip():
+        return None
+    body = metadata.get("body")
+    excerpt = body.strip() if isinstance(body, str) and body.strip() else None
+    relation_label = {
+        "RESOLVES": "해결한 이슈",
+        "REFERENCES": "참조한 이슈",
+    }.get(relation)
+    state = metadata.get("state")
+    details = [relation_label, state if isinstance(state, str) else None]
+    description = " · ".join(value for value in details if value)
+    return {
+        "id": evidence_id("itsm", node["id"]),
+        "type": "itsm",
+        "title": f"{item_type} #{number}: {title.strip()}",
+        "location": metadata.get("url") if isinstance(metadata.get("url"), str) else "",
+        "description": description or excerpt or title.strip(),
+        "excerpt": excerpt,
+        "fullExcerpt": excerpt,
     }
 
 

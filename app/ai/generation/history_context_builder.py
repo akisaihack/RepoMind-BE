@@ -11,6 +11,8 @@ from app.dtos.history_context import (
     HistoryChangeContext,
     HistoryCommitContext,
     HistoryDiffContext,
+    HistoryIssueContext,
+    HistoryPullRequestContext,
     HistoryVersionContext,
 )
 
@@ -42,6 +44,8 @@ class HistoryContextBuilder:
         method_by_version: dict[str, str] = {}
         introduced_commit_by_version: dict[str, str] = {}
         deleted_commits_by_method: dict[str, list[str]] = defaultdict(list)
+        pull_requests_by_commit: dict[str, set[str]] = defaultdict(set)
+        issues_by_pull_request: dict[str, dict[str, str]] = defaultdict(dict)
 
         for edge in edges:
             if not isinstance(edge, Mapping):
@@ -57,6 +61,12 @@ class HistoryContextBuilder:
                 introduced_commit_by_version[source] = target
             elif relation == "DELETED_IN":
                 deleted_commits_by_method[source].append(target)
+            elif relation == "CONTAINS_COMMIT":
+                pull_requests_by_commit[target].add(source)
+            elif relation in {"RESOLVES", "REFERENCES"}:
+                previous = issues_by_pull_request[source].get(target)
+                if previous != "RESOLVES":
+                    issues_by_pull_request[source][target] = relation
 
         changes_by_method: dict[str, list[HistoryChangeContext]] = defaultdict(list)
         seen_versions: set[tuple[str, str, str]] = set()
@@ -82,12 +92,21 @@ class HistoryContextBuilder:
             seen_versions.add(identity)
             method_node = nodes_by_id.get(method_by_version.get(version_id, ""), {})
             method = _method_name(method_node, version.symbol)
+            pull_requests, issues = _related_work_items(
+                commit_id,
+                nodes_by_id,
+                pull_requests_by_commit,
+                issues_by_pull_request,
+                available_evidence_ids,
+            )
             changes_by_method[method].append(
                 HistoryChangeContext(
                     method=method,
                     change_type="first_observed",
                     version=version,
                     commit=commit,
+                    pull_requests=pull_requests,
+                    issues=issues,
                 )
             )
 
@@ -116,11 +135,20 @@ class HistoryContextBuilder:
                         else None
                     )
                     if commit is not None:
+                        pull_requests, issues = _related_work_items(
+                            commit_id,
+                            nodes_by_id,
+                            pull_requests_by_commit,
+                            issues_by_pull_request,
+                            available_evidence_ids,
+                        )
                         result.append(
                             HistoryChangeContext(
                                 method=method,
                                 change_type="deleted",
                                 commit=commit,
+                                pull_requests=pull_requests,
+                                issues=issues,
                             )
                         )
 
@@ -177,6 +205,108 @@ def _commit_context(
         authored_at=_optional_string(metadata.get("authored_at")),
         committed_at=_optional_string(metadata.get("committed_at")),
         url=_optional_string(metadata.get("url")),
+        evidence_id=(
+            expected_evidence_id if expected_evidence_id in available_evidence_ids else None
+        ),
+    )
+
+
+def _related_work_items(
+    commit_id: str,
+    nodes_by_id: Mapping[str, Mapping],
+    pull_requests_by_commit: Mapping[str, set[str]],
+    issues_by_pull_request: Mapping[str, dict[str, str]],
+    available_evidence_ids: set[str],
+) -> tuple[list[HistoryPullRequestContext], list[HistoryIssueContext]]:
+    pull_requests: list[HistoryPullRequestContext] = []
+    issues_by_id: dict[str, HistoryIssueContext] = {}
+    for pull_request_id in sorted(pull_requests_by_commit.get(commit_id, set())):
+        node = nodes_by_id.get(pull_request_id)
+        pull_request = _pull_request_context(node, available_evidence_ids) if node else None
+        if pull_request is None:
+            continue
+        pull_requests.append(pull_request)
+        for issue_id, relation in issues_by_pull_request.get(pull_request_id, {}).items():
+            issue_node = nodes_by_id.get(issue_id)
+            issue = (
+                _issue_context(issue_node, relation, available_evidence_ids)
+                if issue_node
+                else None
+            )
+            if issue is None:
+                continue
+            existing = issues_by_id.get(issue_id)
+            if existing is None or issue.relation == "RESOLVES":
+                issues_by_id[issue_id] = issue
+
+    pull_requests.sort(key=lambda item: item.number)
+    issues = sorted(
+        issues_by_id.values(),
+        key=lambda item: (item.relation != "RESOLVES", item.number),
+    )
+    return pull_requests, issues
+
+
+def _pull_request_context(
+    node: Mapping, available_evidence_ids: set[str]
+) -> HistoryPullRequestContext | None:
+    metadata = node.get("metadata")
+    node_id = node.get("id")
+    if not isinstance(metadata, Mapping) or metadata.get("node_type") != "PullRequest":
+        return None
+    number = metadata.get("number")
+    title = metadata.get("title")
+    if not isinstance(node_id, str) or not isinstance(number, int) or not isinstance(title, str):
+        return None
+    expected_evidence_id = evidence_id("itsm", node_id)
+    return HistoryPullRequestContext(
+        node_id=node_id,
+        number=number,
+        title=title,
+        body=_optional_string(metadata.get("body")),
+        state=_optional_string(metadata.get("state")),
+        url=_optional_string(metadata.get("url")),
+        merged=metadata.get("merged") if isinstance(metadata.get("merged"), bool) else None,
+        merged_at=_optional_string(metadata.get("merged_at")),
+        evidence_id=(
+            expected_evidence_id if expected_evidence_id in available_evidence_ids else None
+        ),
+    )
+
+
+def _issue_context(
+    node: Mapping,
+    relation: str,
+    available_evidence_ids: set[str],
+) -> HistoryIssueContext | None:
+    metadata = node.get("metadata")
+    node_id = node.get("id")
+    if (
+        not isinstance(metadata, Mapping)
+        or metadata.get("node_type") != "Issue"
+        or relation not in {"RESOLVES", "REFERENCES"}
+    ):
+        return None
+    number = metadata.get("number")
+    title = metadata.get("title")
+    if not isinstance(node_id, str) or not isinstance(number, int) or not isinstance(title, str):
+        return None
+    raw_labels = metadata.get("labels")
+    labels = (
+        [item for item in raw_labels if isinstance(item, str)]
+        if isinstance(raw_labels, list)
+        else []
+    )
+    expected_evidence_id = evidence_id("itsm", node_id)
+    return HistoryIssueContext(
+        node_id=node_id,
+        number=number,
+        title=title,
+        relation=relation,
+        body=_optional_string(metadata.get("body")),
+        state=_optional_string(metadata.get("state")),
+        url=_optional_string(metadata.get("url")),
+        labels=labels,
         evidence_id=(
             expected_evidence_id if expected_evidence_id in available_evidence_ids else None
         ),

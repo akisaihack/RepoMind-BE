@@ -22,7 +22,15 @@ _RELATIONS_BY_INTENT = {
     QueryIntent.FLOW: frozenset({"CALLS"}),
     QueryIntent.DEPENDENCY: frozenset({"CALLS", "IMPLEMENTS", "EXTENDS", "IMPORTS"}),
     QueryIntent.HISTORY: frozenset(
-        {"INTRODUCED_IN", "DELETED_IN", "CHANGED_BY", "MANAGES"}
+        {
+            "INTRODUCED_IN",
+            "DELETED_IN",
+            "CHANGED_BY",
+            "CONTAINS_COMMIT",
+            "RESOLVES",
+            "REFERENCES",
+            "MANAGES",
+        }
     ),
     QueryIntent.EXPLANATION: frozenset(
         {"CALLS", "DECLARES", "CONTAINS", "IMPLEMENTS", "EXTENDS", "EXPOSES"}
@@ -182,7 +190,7 @@ class LLMContextBuilder:
                 item = HistoryChangeContext.model_validate(row)
             except ValueError:
                 continue
-            compact.append(item.model_dump(exclude_none=True))
+            compact.append(item.model_dump(exclude_none=True, exclude_defaults=True))
         return compact
 
     def _fit_budget(
