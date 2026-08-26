@@ -109,6 +109,10 @@ def test_maps_nodes_relationships_and_file_change_id() -> None:
             "properties": {},
         },
     )
+    assert {row["toKey"] for row in graph.pull_request_commits} == {
+        "100:commit:abc123",
+        "100:commit:merge123",
+    }
     assert len(graph.developers) == 2
     assert graph.developer_commits[0]["githubId"] == 2
 
