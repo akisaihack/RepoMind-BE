@@ -104,6 +104,7 @@ class ChatResponseData:
         프론트엔드 렌더링에 필요한 모든 AI 분석 결과를 한 객체에 담아 반환함.
     </pre>
 
+    @param questionKind 최종 적용된 질문 유형 (flow, impact, intent, location)
     @param summary 전체 답변 요약
     @param claims 상세 주장 및 분석 내용 배열
     @param evidence 주장의 근거가 된 출처(코드, 이슈 등) 배열
@@ -113,6 +114,7 @@ class ChatResponseData:
     @param suggestedQuestions 후속 질문 추천 목록 (선택 사항)
     """
 
+    questionKind: str
     summary: str
     claims: list[Claim]
     evidence: list[Evidence]

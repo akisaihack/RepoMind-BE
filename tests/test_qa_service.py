@@ -126,6 +126,7 @@ def test_ask_leaves_question_kind_empty_for_pipeline_classification() -> None:
     store.get_with_repository.return_value = chat_session
     final_state = {
         "answer": {"answer": "코드는 AuthService에 있습니다.", "intent": "EXPLANATION"},
+        "question_kind": QuestionKind.LOCATION,
         "evidence": [],
         "graph_results": {"nodes": [], "edges": []},
         "is_sufficient": False,
@@ -136,6 +137,7 @@ def test_ask_leaves_question_kind_empty_for_pipeline_classification() -> None:
     response = service.ask(chat_session.id, ChatRequest(question="로그인 코드는 어디에 있어?"))
 
     assert response.summary == "코드는 AuthService에 있습니다."
+    assert response.questionKind == "location"
     assert response.confidence.level == "low"
     assert pipeline_runner.call_args.kwargs["question_kind"] is None
 

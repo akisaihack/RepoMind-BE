@@ -32,6 +32,7 @@ def _create_session(app) -> UUID:
 
 def _qa_response() -> ChatResponseData:
     return ChatResponseData(
+        questionKind="flow",
         summary="회원 탈퇴 요청은 MemberService에서 처리합니다.",
         claims=[],
         evidence=[],
