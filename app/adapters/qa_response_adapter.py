@@ -53,7 +53,7 @@ _GRAPH_NODE_TYPES = {
     "file",
     "package",
 }
-_EVIDENCE_TYPES = {"code", "itsm", "commit"}
+_EVIDENCE_TYPES = {"code", "commit", "pr", "issue", "itsm"}
 _FLOW_EDGE_TYPES = {"calls", "http_calls", "handled_by"}
 _QUESTION_KIND_BY_INTENT = {
     QueryIntent.FLOW: QuestionKind.FLOW,

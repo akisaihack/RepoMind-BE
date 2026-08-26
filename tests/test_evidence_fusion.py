@@ -1,5 +1,6 @@
 """검색 후보와 사용자용 답변 근거 분리 테스트."""
 
+from app.ai.rag.evidence_ids import evidence_id
 from app.ai.rag.nodes.evidence_fusion import _code_location, fuse_evidence
 
 
@@ -231,10 +232,12 @@ def test_exposes_pull_request_and_issue_as_intent_evidence() -> None:
 
     result = fuse_evidence(state)["evidence"]
 
-    assert [item["type"] for item in result] == ["itsm", "itsm"]
+    assert [item["type"] for item in result] == ["pr", "issue"]
+    assert result[0]["id"] == evidence_id("pr", "pr:42")
     assert result[0]["title"] == "Pull Request #42: 중복 투표 방지"
     assert result[0]["excerpt"] == "동일 사용자의 두 번째 투표를 거부합니다."
     assert result[1]["title"] == "Issue #35: 중복 투표 허용 문제"
+    assert result[1]["id"] == evidence_id("issue", "issue:35")
     assert result[1]["description"] == "해결한 이슈 · closed"
 
 

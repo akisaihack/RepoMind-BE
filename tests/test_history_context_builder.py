@@ -168,8 +168,8 @@ def test_attaches_pull_request_and_resolved_issue_to_commit_change() -> None:
     pull_request = _pull_request_node()
     issue = _issue_node()
     evidence = [
-        {"id": evidence_id("itsm", "pr:42")},
-        {"id": evidence_id("itsm", "issue:35")},
+        {"id": evidence_id("pr", "pr:42")},
+        {"id": evidence_id("issue", "issue:35")},
     ]
 
     result = HistoryContextBuilder().build(
@@ -185,7 +185,7 @@ def test_attaches_pull_request_and_resolved_issue_to_commit_change() -> None:
     )
 
     assert result[0].pull_requests[0].number == 42
-    assert result[0].pull_requests[0].evidence_id == evidence_id("itsm", "pr:42")
+    assert result[0].pull_requests[0].evidence_id == evidence_id("pr", "pr:42")
     assert result[0].issues[0].number == 35
     assert result[0].issues[0].relation == "RESOLVES"
-    assert result[0].issues[0].evidence_id == evidence_id("itsm", "issue:35")
+    assert result[0].issues[0].evidence_id == evidence_id("issue", "issue:35")

@@ -258,7 +258,7 @@ def _pull_request_context(
     title = metadata.get("title")
     if not isinstance(node_id, str) or not isinstance(number, int) or not isinstance(title, str):
         return None
-    expected_evidence_id = evidence_id("itsm", node_id)
+    expected_evidence_id = evidence_id("pr", node_id)
     return HistoryPullRequestContext(
         node_id=node_id,
         number=number,
@@ -297,7 +297,7 @@ def _issue_context(
         if isinstance(raw_labels, list)
         else []
     )
-    expected_evidence_id = evidence_id("itsm", node_id)
+    expected_evidence_id = evidence_id("issue", node_id)
     return HistoryIssueContext(
         node_id=node_id,
         number=number,

@@ -63,7 +63,8 @@ class GraphData:
 @dataclass
 class Evidence:
     id: str
-    type: Literal["code", "itsm", "commit"]
+    # itsm은 이미 저장된 structured_answer 역직렬화 호환용으로만 유지한다.
+    type: Literal["code", "commit", "pr", "issue", "itsm"]
     title: str
     location: str
     description: str

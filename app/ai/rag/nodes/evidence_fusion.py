@@ -157,12 +157,13 @@ def _history_evidence(
         elif node_type == "Commit":
             item = _commit_evidence(node, metadata)
         elif node_type == "PullRequest":
-            item = _work_item_evidence(node, metadata, "Pull Request")
+            item = _work_item_evidence(node, metadata, "Pull Request", "pr")
         elif node_type == "Issue":
             item = _work_item_evidence(
                 node,
                 metadata,
                 "Issue",
+                "issue",
                 relation=issue_relations.get(node.get("id")),
             )
         else:
@@ -229,6 +230,7 @@ def _work_item_evidence(
     node: dict,
     metadata: Mapping,
     item_type: str,
+    evidence_type: str,
     *,
     relation: str | None = None,
 ) -> dict | None:
@@ -246,8 +248,8 @@ def _work_item_evidence(
     details = [relation_label, state if isinstance(state, str) else None]
     description = " · ".join(value for value in details if value)
     return {
-        "id": evidence_id("itsm", node["id"]),
-        "type": "itsm",
+        "id": evidence_id(evidence_type, node["id"]),
+        "type": evidence_type,
         "title": f"{item_type} #{number}: {title.strip()}",
         "location": metadata.get("url") if isinstance(metadata.get("url"), str) else "",
         "description": description or excerpt or title.strip(),
