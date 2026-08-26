@@ -10,6 +10,7 @@ from app.ai.rag.nodes import (
     evidence_validator,
     graph_retriever,
     question_analyzer,
+    question_rewriter,
     response_composer,
     target_selector,
     vector_retriever,
@@ -104,6 +105,94 @@ def test_pipeline_passes_question_kind_and_returns_composed_answer() -> None:
         "fusion",
         "validation",
         "response",
+    ]
+
+
+def test_pipeline_runs_question_rewriter_first_and_downstream_nodes_see_rewritten_question() -> (
+    None
+):
+    # 2026-08-26 신규: question_rewriter가 question_analyzer보다 먼저 실행되고,
+    # 재작성된 질문이 state["question"]을 통해 이후 노드에 그대로 전달되는지 확인
+    # (docs/qa_retrieval_part_plan.md "0-14" 참고).
+    call_order = []
+    observed_questions = []
+
+    def rewrite(state):
+        call_order.append("rewrite")
+        observed_questions.append(state["question"])
+        return {"question": "CancelController.cancel()을 어떻게 수정해야 해?"}
+
+    def classify(state):
+        call_order.append("question")
+        observed_questions.append(state["question"])
+        return {"question_kind": QuestionKind.FLOW}
+
+    def resolve(_state):
+        call_order.append("entity")
+        return {"entity_candidates": []}
+
+    def vector(state):
+        call_order.append("vector")
+        observed_questions.append(state["question"])
+        return {"vector_results": [{"graph_node_id": "version:1"}]}
+
+    def graph(_state):
+        call_order.append("graph")
+        return {"graph_results": {"nodes": [], "edges": []}}
+
+    def select(state):
+        call_order.append("target")
+        return {"selected_target": state["vector_results"][0]}
+
+    def fuse(_state):
+        call_order.append("fusion")
+        return {"evidence": []}
+
+    def enrich(_state):
+        call_order.append("enrichment")
+        return {"enriched_code_results": []}
+
+    def validate(state):
+        call_order.append("validation")
+        return {"is_sufficient": True, "retry_count": state.get("retry_count", 0) + 1}
+
+    def compose(_state):
+        call_order.append("response")
+        return {
+            "answer": {
+                "answer": "수정 방법 답변",
+                "intent": "FLOW",
+                "visualization": None,
+            }
+        }
+
+    patches = (
+        (question_rewriter, "rewrite_follow_up_question", rewrite),
+        (question_analyzer, "classify_question", classify),
+        (entity_resolver, "resolve_entities", resolve),
+        (vector_retriever, "search_vector_evidence", vector),
+        (target_selector, "select_target", select),
+        (graph_retriever, "search_graph_evidence", graph),
+        (evidence_enricher, "enrich_code_evidence", enrich),
+        (evidence_fusion, "fuse_evidence", fuse),
+        (evidence_validator, "validate_evidence_sufficiency", validate),
+        (response_composer, "compose_answer", compose),
+    )
+
+    with ExitStack() as stack:
+        for module, attribute, replacement in patches:
+            stack.enter_context(patch.object(module, attribute, replacement))
+        result = run_qa_pipeline(question="그거 어떻게 고쳐?", github_repository_id=1)
+
+    assert result["answer"] == "수정 방법 답변"
+    assert call_order[0] == "rewrite"
+    assert call_order[1] == "question"
+    # question_rewriter가 원본("그거 어떻게 고쳐?")을 받고, 그 이후 모든 노드는
+    # 재작성된 질문만 봐야 한다.
+    assert observed_questions == [
+        "그거 어떻게 고쳐?",
+        "CancelController.cancel()을 어떻게 수정해야 해?",
+        "CancelController.cancel()을 어떻게 수정해야 해?",
     ]
 
 

@@ -17,8 +17,9 @@ class FakeNode(dict):
         self.labels = labels
 
 
-class FakeRelationship:
-    def __init__(self, start_node, end_node, relation_type: str):
+class FakeRelationship(dict):
+    def __init__(self, start_node, end_node, relation_type: str, **properties):
+        super().__init__(properties)
         self.start_node = start_node
         self.end_node = end_node
         self.type = relation_type
@@ -207,3 +208,147 @@ def test_method_version_label_falls_back_when_owner_not_in_same_path() -> None:
     result = _path_to_graph_dict([{"path": FakePath([version], [])}])
 
     assert result["nodes"][0]["label"] == "코드 버전 (L5-9)"
+
+
+def test_file_node_shows_filename_instead_of_raw_graph_key() -> None:
+    # 2026-08-24 회귀 테스트 (같은 날 두 번째 라운드, "location" 질문의
+    # shallow_neighborhood 결과를 FE에서 직접 확인하다가 발견함): File 노드는
+    # "name" 프로퍼티가 없고 "path"만 있는데, _node_type/_node_label 둘 다
+    # File을 몰라서 "symbol" 타입 + 내부 그래프 key 그대로("123231656:file:...")가
+    # 라벨로 노출되던 문제.
+    file_node = FakeNode(
+        {"File"},
+        key="123231656:file:polling-app-client/src/app/App.js",
+        path="polling-app-client/src/app/App.js",
+    )
+
+    result = _path_to_graph_dict([{"path": FakePath([file_node], [])}])
+
+    assert result["nodes"][0]["type"] == "file"
+    assert result["nodes"][0]["label"] == "App.js"
+    assert result["nodes"][0]["detail"] == "polling-app-client/src/app/App.js"
+
+
+def test_package_node_is_typed_distinctly_from_generic_symbol() -> None:
+    package_node = FakeNode({"Package"}, key="package:com.example.poll", name="com.example.poll")
+
+    result = _path_to_graph_dict([{"path": FakePath([package_node], [])}])
+
+    assert result["nodes"][0]["type"] == "package"
+    assert result["nodes"][0]["label"] == "com.example.poll"
+
+
+def test_getter_setter_methods_are_filtered_out_of_graph_nodes() -> None:
+    # 2026-08-26 신규: 사용자 피드백 — getter/setter 같은 부가적인 노드는
+    # 실행 흐름 그래프에서 오히려 노이즈이므로 빼달라고 함.
+    caller = FakeNode({"Method"}, key="method:save", name="save", class_name="PollService")
+    getter = FakeNode({"Method"}, key="method:getUsername", name="getUsername", class_name="Poll")
+    calls = FakeRelationship(caller, getter, "CALLS")
+
+    result = _path_to_graph_dict([{"path": FakePath([caller, getter], [calls])}])
+
+    node_ids = {node["id"] for node in result["nodes"]}
+    assert node_ids == {"method:save"}
+    assert result["edges"] == []  # getter로 끊긴 엣지도 같이 제거됨
+
+
+def test_start_node_is_kept_even_when_it_matches_getter_setter_pattern() -> None:
+    # "getCurrentUser() 흐름을 알려줘"처럼 시작점 자체가 getter인 경우까지
+    # 사라지면 안 됨 — keep_node_id로 예외 처리.
+    getter = FakeNode(
+        {"Method"}, key="method:getCurrentUser", name="getCurrentUser", class_name="AuthService"
+    )
+    called = FakeNode({"Method"}, key="method:findById", name="findById", class_name="UserRepo")
+    calls = FakeRelationship(getter, called, "CALLS")
+
+    result = _path_to_graph_dict(
+        [{"path": FakePath([getter, called], [calls])}],
+        keep_node_id="method:getCurrentUser",
+    )
+
+    node_ids = {node["id"] for node in result["nodes"]}
+    assert node_ids == {"method:getCurrentUser", "method:findById"}
+
+
+def test_method_version_getter_is_filtered_using_owner_name_via_has_version() -> None:
+    # MethodVersion 자체엔 이름이 없어서, HAS_VERSION으로 연결된 부모 Method의
+    # 이름(setPassword)을 통해 getter/setter 여부를 판단해야 함.
+    caller = FakeNode({"Method"}, key="method:register", name="register", class_name="UserService")
+    setter_method = FakeNode(
+        {"Method"}, key="method:setPassword", name="setPassword", class_name="User"
+    )
+    setter_version = FakeNode({"MethodVersion"}, key="version:setPassword", startLine=1, endLine=2)
+    calls_version = FakeRelationship(caller, setter_version, "CALLS")
+    has_version = FakeRelationship(setter_method, setter_version, "HAS_VERSION")
+
+    result = _path_to_graph_dict(
+        [{"path": FakePath([caller, setter_version, setter_method], [calls_version, has_version])}]
+    )
+
+    node_ids = {node["id"] for node in result["nodes"]}
+    assert node_ids == {"method:register"}
+
+
+def test_similarly_spelled_but_non_accessor_method_names_are_not_filtered() -> None:
+    # "get"/"set"/"is"로 시작하지만 실제 getter/setter가 아닌 일반 단어는
+    # 걸러지면 안 됨(오탐 방지) — 뒤에 대문자/숫자가 바로 오는 것만 매치.
+    getaway = FakeNode({"Method"}, key="method:getaway", name="getaway", class_name="Escape")
+    issue_refund = FakeNode(
+        {"Method"}, key="method:issueRefund", name="issueRefund", class_name="Billing"
+    )
+    setup = FakeNode({"Method"}, key="method:setup", name="setup", class_name="Fixture")
+
+    result = _path_to_graph_dict(
+        [{"path": FakePath([getaway, issue_refund, setup], [])}]
+    )
+
+    node_ids = {node["id"] for node in result["nodes"]}
+    assert node_ids == {"method:getaway", "method:issueRefund", "method:setup"}
+
+
+def test_ambiguous_calls_edges_are_excluded_from_graph() -> None:
+    # 2026-08-26 신규: "ChatMessageStore.get() -> RepositoryStore.get() ->
+    # ChatSessionStore.get()"처럼 서로 무관한 클래스의 동명 메서드끼리
+    # CALLS로 잘못 이어진 채 반복적으로 나타나는 문제를 사용자가 제보함.
+    # app/graph/mappings.py의 resolve_cross_file_references()가 호출 대상을
+    # 하나로 못 좁히면 후보 전부에 "ambiguous": True를 달아 이어버리는데,
+    # evidence_enricher.py는 이미 이런 엣지를 답변 근거에서 제외하고
+    # 있었지만 그래프 시각화 경로는 같은 체크가 없어서 화면에만 새어나가고
+    # 있었음 — 여기서 같은 기준으로 걸러야 함.
+    message_store_get = FakeNode(
+        {"Method"}, key="method:ChatMessageStore.get", name="get", class_name="ChatMessageStore"
+    )
+    repository_store_get = FakeNode(
+        {"Method"}, key="method:RepositoryStore.get", name="get", class_name="RepositoryStore"
+    )
+    ambiguous_call = FakeRelationship(
+        message_store_get, repository_store_get, "CALLS", ambiguous=True
+    )
+
+    result = _path_to_graph_dict(
+        [{"path": FakePath([message_store_get, repository_store_get], [ambiguous_call])}]
+    )
+
+    assert result["edges"] == []
+
+
+def test_unambiguous_calls_edges_are_kept() -> None:
+    caller = FakeNode({"Method"}, key="method:save", name="save", class_name="PollService")
+    callee = FakeNode({"Method"}, key="method:validate", name="validate", class_name="PollService")
+    call = FakeRelationship(caller, callee, "CALLS", resolved=True)
+
+    result = _path_to_graph_dict([{"path": FakePath([caller, callee], [call])}])
+
+    assert len(result["edges"]) == 1
+    assert result["edges"][0]["source"] == "method:save"
+    assert result["edges"][0]["target"] == "method:validate"
+
+
+def test_ambiguous_http_calls_edges_are_also_excluded() -> None:
+    caller = FakeNode({"Method"}, key="method:handler", name="handler", class_name="Controller")
+    endpoint = FakeNode({"Endpoint"}, key="endpoint:1", http_method="GET", path="/polls")
+    ambiguous_http_call = FakeRelationship(caller, endpoint, "HTTP_CALLS", ambiguous=True)
+
+    result = _path_to_graph_dict([{"path": FakePath([caller, endpoint], [ambiguous_http_call])}])
+
+    assert result["edges"] == []

@@ -801,6 +801,468 @@ CALL_FLOW가 아닌 질문이면 `state["graph_results"]`가 그대로) 최종�
 
 ---
 
+## 0-13. "location" 그래프 File 노드 라벨 + FLOW 그래프 EXPOSES 엣지 필터링 버그 수정 (2026-08-24~26)
+
+두 라운드로 나뉘어 진행됨: 먼저 팀원의 이력(history) 관련 머지를 pull 받은
+뒤 그래프 부분이 잘 살아있는지 확인하다가 두 개의 새 버그를 찾아서 리포트만
+해뒀고, 이어서 사용자가 스크린샷으로 새로 보고한 "location" 시각화 문제를
+같은 세션에서 진단·수정함. 이번 절은 그 두 라운드를 합쳐서 기록.
+
+### (A) File/Package 노드 라벨 버그 (2026-08-24, 두 번째 라운드)
+
+"이 파일이 어디서 쓰이나요" 류의 LOCATION 질문(`shallow_neighborhood` 탐색)에
+대한 그래프 시각화에서, File 노드 라벨이 사람이 읽을 수 있는 파일명이 아니라
+내부 그래프 key(`"123231656:file:polling-app-client/src/app/App.js"`)가 그대로
+노출되는 문제를 사용자가 스크린샷으로 제보함.
+
+**원인**: `app/graph/repositories/code_graph.py`의 `ALLOWED_NODE_LABELS`에는
+`File`/`Package`가 정상적인 노드 타입으로 포함돼 있고 `app/graph/mappings.py`가
+실제로 File 노드를 만드는데(속성은 `path`만 있고 `name`은 없음), 0-12에서
+고친 `traversal.py`의 `_node_type()`/`_node_label()`/`_node_detail()`이
+Method/MethodVersion/Class/Interface/Endpoint/Commit만 알고 File/Package는
+전혀 모르는 상태였음 — 그래서 전부 방어적 기본값(`"symbol"` 타입 +
+`node.get("name") or node.get("key")` 라벨)으로 떨어졌고, `name`이 없으니
+`key`가 그대로 라벨로 노출됨.
+
+**수정 (`app/graph/queries/traversal.py`, 내 파일)**:
+- `_node_type()`에 `"File"→"file"`, `"Package"→"package"` 분기 추가.
+- `_node_label()`에 File 분기 추가 — `path`에서 파일명만 잘라서 보여줌
+  (`path.rsplit("/", 1)[-1]`), Package는 `name` 그대로.
+- `_node_detail()`에 File 분기 추가 — 전체 경로는 여기 보존(라벨은
+  파일명만, 필요하면 detail에서 전체 경로 확인 가능).
+- `tests/test_graph_traversal.py`에 회귀 테스트 2개 추가
+  (`test_file_node_shows_filename_instead_of_raw_graph_key`,
+  `test_package_node_is_typed_distinctly_from_generic_symbol`).
+
+**함께 넓힌 화이트리스트**: `app/adapters/qa_response_adapter.py`의
+`_GRAPH_NODE_TYPES`와 `app/dtos/chat.py`의 `GraphNode.type` Literal에
+`"file"`/`"package"` 추가 — 0-12와 같은 이유(안 넓히면 traversal.py가 아무리
+잘 분류해도 여기서 다시 "symbol"로 뭉개짐).
+
+### (B) FLOW 그래프에서 EXPOSES(엔드포인트) 엣지가 조용히 사라지는 버그 (2026-08-24 발견, 2026-08-26 수정)
+
+(A)와 별개로, 팀원이 pull한 이력(history) 관련 머지에 `qa_response_adapter.py`의
+`_filtered_flow_graph()`/`_log_graph_diagnostics()`가 새로 딸려 들어온 걸
+확인하던 중 발견. FLOW 그래프를 FE에 공개하기 전에 "진짜 flow에 쓰는 엣지
+타입"만 남기고 걸러내는 방어 로직인데, 화이트리스트(`_FLOW_EDGE_TYPES`)가
+`{"calls", "http_calls", "handled_by"}`로 돼 있었음.
+
+**원인**: 코드베이스 전체를 grep해도 `"HANDLED_BY"`/`"handled_by"`를 만드는
+곳이 어디에도 없음 — Method→Endpoint 관계로 실제 쓰이는 타입은
+`app/graph/repositories/code_graph.py`의 `ALLOWED_RELATIONSHIP_TYPES`와
+`app/graph/queries/traversal.py`의 `endpoint_path` 쿼리에 있는 `"EXPOSES"`
+(소문자화되면 `"exposes"`)뿐. 즉 존재하지도 않는 타입 이름을 화이트리스트에
+넣어놓은 것이어서, 실제 EXPOSES 엣지는 전부 `_filtered_flow_graph()`에서
+걸러지고, 그 엣지에만 연결된 엔드포인트 노드까지 같이 사라짐 — API 엔드포인트
+질문(예: "이 취소 요청은 어느 엔드포인트에서 처리돼?")에 대한 FLOW 그래프에서
+엔드포인트 노드 자체가 통째로 안 보이는 결과가 됨. fake Neo4j 객체로 재현해서
+실제로 확인함.
+
+**수정 방향은 사용자와 상의 후 결정**: 엣지 타입 이름을 새로 만들어서
+어딘가에서 rename하는 방식도 가능했지만, 다른 관계 타입들과 동일하게
+"Neo4j 관계 이름을 그대로 소문자화"하는 `_graph_edge_from()`의 기존 규칙을
+따르는 쪽으로 정리하기로 함(새 메커니즘을 안 늘리는 쪽).
+
+**수정한 파일:**
+- `app/adapters/qa_response_adapter.py` (⚠️ 팀원 파일) — `_FLOW_EDGE_TYPES`에서
+  `"handled_by"`를 빼고 `"exposes"`로 교체.
+- `app/dtos/chat.py` (⚠️ 팀원 파일) — `GraphData` 클래스 docstring이
+  `"``kind == 'flow'`` exposes only ``calls``, ``http_calls``, and
+  ``handled_by`` edges."`로 돼 있던 걸 `"exposes"`로 수정(코드 계약과
+  문서가 어긋나 있던 것도 같이 바로잡음).
+- `tests/test_qa_response_adapter.py` — 회귀 테스트 신규 추가
+  (`test_flow_graph_keeps_endpoint_nodes_reached_via_exposes_edge`):
+  Method→Endpoint EXPOSES 엣지가 있는 FLOW 그래프를 넣었을 때 엔드포인트
+  노드와 엣지가 살아남는지 확인.
+
+### (C) `_filtered_flow_graph()`가 엣지가 하나도 없을 때 노드까지 지우는 동작 (수정 안 함 — 의도된 결정)
+
+같은 파일을 보다가 발견한 별개의 문제: 호출이 하나도 없는 메서드에 대해
+FLOW 질문을 하면(`GraphResponse.edges == []`), `_filtered_flow_graph()`의
+`connected_ids` 집합이 비어서 유일한 노드까지 걸러져 빈 그래프
+(`nodes=[], edges=[]`)가 나감. 이 때문에 기존 테스트
+`test_adapts_grounded_rag_response_with_visualization`이
+`result.graph.nodes[0].type == "symbol"`을 기대하다가 `IndexError`로 깨져
+있었음.
+
+**사용자에게 두 가지 선택지를 제시함**: (1) 고립 노드라도 화면에 보이게
+`_filtered_flow_graph()` 로직을 바꾸는 안(내 추천), (2) 지금 동작(빈 그래프)을
+그대로 유지하고 테스트 기대값만 현재 동작에 맞게 고치는 안. **사용자가
+(2)를 선택함 — "빈 그래프 유지, 테스트만 수정".** 즉 `_filtered_flow_graph()`의
+동작은 의도적으로 안 건드림.
+
+**수정한 파일:**
+- `tests/test_qa_response_adapter.py` — 해당 테스트의 마지막 부분을
+  `assert result.graph.nodes[0].type == "symbol"` → `assert result.graph.nodes
+  == []` / `assert result.graph.kind == "flow"`로 수정(현재 동작을 정확히
+  기술하도록).
+
+**참고**: 호출이 하나도 없는 메서드의 FLOW 그래프가 통째로 비어 보이는 게
+FE 입장에서 여전히 어색할 수 있음 — 나중에 UX 논의가 다시 나오면 (C)의
+선택지 (1)로 되돌릴 수 있다는 점을 팀에 남겨둠(코드 변경은 지금 없음, 결정
+기록만).
+
+**검증한 것:**
+- `tests/test_qa_response_adapter.py` + `tests/test_graph_traversal.py`
+  로컬 실행 — 16개 전부 통과.
+- `pytest tests/ --ignore=tests/test_response_generation_dtos.py` 전체
+  로컬 실행 — 51개 전부 통과(제외한 1개는 `app.ai.rag.evidence_ids` 모듈이
+  이 세션의 로컬 미러에 없어서 생기는 순수 샌드박스 제약이고, 이번 수정과는
+  무관 — 0-9/0-10/0-11에서도 반복 언급된 동일한 한계).
+
+**아직 안 한 것:**
+- 실 데이터(Neo4j)로는 검증 안 함 — fake 객체 재현 + 단위 테스트로만 확인.
+- (C)에서 남긴 "고립 노드 숨김" UX가 실제로 괜찮은지는 FE에서 빈 호출
+  메서드로 다시 질문해서 확인해볼 것.
+
+---
+
+## 0-14. 후속 질문이 이전 대화 맥락을 못 잡는 문제 — 원인 확정 (2026-08-26, ⚠️ 구현은 0-15에서 완료됨)
+
+사용자가 "질문 하나 하고 이어서 질문하면 맥락이 잘 안 이어지는 것 같다"고
+보고해서 코드로 원인을 추적함. **Claude 세션 문제가 아니라 RepoMind 백엔드
+자체의 실제 동작임을 확인.**
+
+**원인 (정확히 특정함)**: `app/services/qa_service.py`의 `QAService.ask()`가
+`run_qa_pipeline_state()`를 호출할 때 `conversation_id=str(context.session_id)`를
+넘겨서 `QAState.conversation_id`(`app/ai/rag/state.py`)에 실리긴 하지만,
+파이프라인의 9개 노드(`question_analyzer`, `entity_resolver`,
+`vector_retriever`, `target_selector`, `graph_retriever`, `evidence_enricher`,
+`evidence_fusion`, `evidence_validator`, `response_composer`) 중 이 값을
+실제로 읽는 곳이 하나도 없음(`grep -rn "conversation_id"` 전체 결과로 확인 —
+정의/전달만 있고 소비하는 곳이 없음). 이전 대화를 조회하는
+`ChatMessageStore.list_by_session()`(`app/repositories/chat_message.py`)도
+이미 구현돼 있지만, 실제로 호출되는 곳은 `app/api/v1/chat.py`에서 답변이
+끝난 뒤 **저장**(`create_exchange`)할 때뿐 — 새 질문을 처리하기 *전에* 이전
+메시지를 불러와서 파이프라인에 넘기는 코드는 어디에도 없음.
+
+결과적으로 FE 화면엔 이전 대화가 다 보이지만(FE가 세션 메시지 목록을 별도로
+다시 불러와서 렌더링함, 0-8 참고), 백엔드 입장에서는 매 질문이 완전히
+독립적으로(이전 질문/답변을 전혀 모르는 상태로) 검색·분류·답변됨 — 그래서
+"그거 어떻게 고쳐?"류의 후속 질문이 "그거"가 뭔지 못 잡음.
+
+**사용자와 상의한 구현 방향 (참고용으로 기록, 아직 미채택):**
+1. 후속 질문 재작성(query rewriting) — 새 노드(또는 question_analyzer 확장)가
+   `ChatMessageStore.list_by_session()`으로 최근 대화를 불러와서, LLM으로
+   후속 질문을 독립형 질문으로 재작성한 뒤 그 결과를 기존 검색 파이프라인에
+   그대로 흘려보냄. 검색(vector/graph) 정확도까지 같이 개선됨 — 이번 대화에서
+   추천한 방향.
+2. 답변 생성 프롬프트에만 최근 대화 이력 주입 — 검색은 원문 질문 그대로 쓰고,
+   `response_composer`/`answer_generator.py` 프롬프트에만 최근 이력을 곁들여서
+   톤/맥락만 자연스럽게. 구현은 더 간단하지만 검색 자체의 정확도는 못 고침.
+3. 1+2 하이브리드.
+
+**사용자 결정 (2026-08-26, 최초)**: 일단 설명만 듣고 구현은 보류. →
+같은 날 대화를 이어가면서 옵션 1(질문 재작성)으로 바로 구현해달라는 요청을
+받아서 실제로 구현함 — 아래 0-15 참고.
+
+---
+
+## 0-15. 후속 질문 재작성(query rewriting) 구현 — 0-14 이어서 (2026-08-26)
+
+0-14에서 진단만 하고 보류했던 걸, 같은 대화에서 "질문 재작성 방식으로
+구현해줘"라는 요청을 받아 실제로 구현함. 방향은 0-14에서 정리한 옵션 1
+(검색 이전 단계에서 질문 자체를 독립형으로 재작성) 그대로.
+
+**왜 옵션 1인지 (사용자 질문에 답한 내용)**: `vector_retriever.py`가
+`state["question"]`을 그대로 임베딩해서 pgvector 검색을 하고,
+`graph_retriever.py`는 그 결과의 `graph_node_id`를 Neo4j 탐색 시작점으로
+쓴다. "그거 어떻게 고쳐?"를 원문 그대로 임베딩하면 애초에 관련 없는 코드가
+검색되므로, 답변 생성 프롬프트에만 이력을 곁들이는 옵션 2는 이미 잘못 검색된
+근거를 못 고친다 — 오히려 `evidence_validator`가 "근거 불충분"으로 재시도만
+반복할 위험도 있음. 검색 이전에 질문 자체를 고치는 게 근본적인 해결책.
+
+**신규/수정 파일 (전부 내 파트, 팀원 리뷰 불필요):**
+- `app/dtos/question_rewrite.py` (신규) — `QuestionRewriteDecision`
+  (`rewritten_question`, `reason`), `app/dtos/question.py`의
+  `QuestionClassificationDecision`과 동일한 패턴.
+- `app/ai/generation/prompts.py` — `QUESTION_REWRITE_SYSTEM_PROMPT`/
+  `QUESTION_REWRITE_USER_PROMPT` 추가. 대명사·생략된 주어를 이전 대화에서
+  가리키는 실제 대상으로 채워 넣되, 질문의 의도 자체는 바꾸지 말라고 명시.
+- `app/ai/question_rewriter.py` (신규) — `QuestionRewriter` /
+  `create_azure_question_rewriter`. `app/ai/question_classifier.py`와
+  완전히 동일한 구조: LLM 실패 시 예외를 삼키고 **원본 질문을 그대로
+  반환**(파이프라인을 막지 않는 방어적 폴백). `history`가 빈 문자열이면
+  (세션의 첫 질문) LLM을 아예 호출하지 않음 — 불필요한 지연/비용 방지.
+- `app/ai/rag/nodes/question_rewriter.py` (신규) — 새 파이프라인 노드
+  `rewrite_follow_up_question()`. `state["conversation_id"]`가 없으면(스크립트/
+  테스트 등 세션 밖 호출) 완전히 스킵. 있으면 `ChatMessageStore.list_by_session()`
+  으로 세션 메시지를 불러와서(최근 3턴 = 메시지 6개까지만, 프롬프트 무한정
+  안 커지게) `QuestionRewriter`를 호출하고, 재작성 결과가 원본과 다를 때만
+  `{"question": rewritten}`을 반환해서 state를 덮어씀.
+- `app/ai/rag/pipeline.py` — `question_rewriter` 노드를 그래프에 추가하고
+  `START -> question_rewriter -> question_analyzer -> ...`로 맨 앞에 배치.
+  question_analyzer보다 먼저 와야 하는 이유: 후속 질문의 유형 분류(flow/
+  impact/intent/location)도 맥락이 채워진(재작성된) 질문 기준으로 해야
+  정확하기 때문.
+- `tests/test_question_rewriter.py` (신규) — `QuestionRewriter` 단위 테스트
+  5개(재작성 성공/이력 없으면 LLM 스킵/LLM 실패 시 원본 폴백/빈 응답 폴백/
+  LLM 없이 생성됐을 때 폴백).
+- `tests/test_question_rewriter_node.py` (신규) — 실제 Flask app context +
+  sqlite 테스트 DB로 ChatSession/ChatMessage를 만들어서 노드 자체를 통합
+  테스트(conversation_id 없음/첫 질문/이전 대화로 재작성/재작성 결과가
+  원본과 같으면 patch 없음, 총 4개).
+- `tests/test_qa_pipeline.py` — question_rewriter가 question_analyzer보다
+  먼저 실행되고, 재작성된 질문이 이후 모든 노드(question_analyzer,
+  vector_retriever 등)에 그대로 전달되는지 확인하는 파이프라인 순서 테스트
+  1개 추가. 기존 2개 테스트는 `conversation_id`를 안 넘기므로(None → 노드가
+  LLM/DB 호출 없이 바로 스킵) 수정 없이 그대로 통과함.
+
+**검증한 것:**
+- 신규 테스트 10개 + 기존 `test_qa_pipeline.py`/`test_qa_service.py` 전부
+  로컬에서 통과 확인.
+- `pytest tests/` 전체(286개, flask_cors 등 누락 의존성 설치 후 처음으로
+  이 세션에서 전체 스위트를 완전히 돌려봄) 통과 — 회귀 없음.
+
+**아직 안 한 것 / 참고:**
+- 실 데이터(Azure OpenAI + 실제 세션)로는 검증 안 함 — LLM 호출부는
+  Mock으로만 확인.
+- "최근 3턴만 반영"은 임의로 정한 기본값 — 실사용해보고 너무 짧거나 길면
+  `app/ai/rag/nodes/question_rewriter.py`의 `MAX_HISTORY_EXCHANGES` 상수만
+  고치면 됨.
+- 재작성이 매 후속 질문마다 LLM 호출을 하나 더 쓰므로, 응답 지연이 체감될
+  정도인지는 실제로 붙여보고 확인 필요(nano 배포 우선 사용이라 비용/속도는
+  낮은 편으로 설계함).
+
+---
+
+## 0-16. 그래프에서 getter/setter 노드 제외 (2026-08-26)
+
+사용자 피드백: "그래프가 나올 때 getter, setter 같은 너무 부가적인 노드는
+빼고 던져주면 좋겠다." 실행 흐름/의존성/위치 그래프 전부 공통으로 겪는
+문제라, 모든 그래프 타입이 거쳐가는 단일 지점인 `traversal.py`의
+`_path_to_graph_dict()`에서 한 번에 처리함(FLOW 전용이 아니라 flow/impact/
+intent/location 전부에 적용됨 — 아래 "아직 안 한 것" 참고).
+
+**구현 (`app/graph/queries/traversal.py`, 내 파일):**
+- `_TRIVIAL_ACCESSOR_NAME_PATTERN = re.compile(r"^(get|set|is)[A-Z0-9]")` +
+  `_is_trivial_accessor_name()`: "get"/"set"/"is" 뒤에 대문자·숫자가 바로
+  오는 이름만 매치 — "getUsername"/"setPassword"/"isActive"는 걸리고,
+  "getaway"/"issueRefund"/"setup" 같은 일반 단어는 안 걸리게 함(오탐 방지,
+  회귀 테스트로 확인).
+- `_effective_method_name(node, method_version_owner)`: Method 노드는 자기
+  `name`, MethodVersion은 자기 이름이 없어서(0-12에서 만든) HAS_VERSION
+  소유자 매핑을 통해 부모 Method의 이름을 빌려서 판별.
+- `_path_to_graph_dict()`에 `keep_node_id` 파라미터 추가 — 이 탐색의
+  시작 노드 key는 getter/setter 패턴에 걸리더라도 무조건 남김("getCurrentUser()
+  흐름을 알려줘"처럼 시작점 자체가 getter인 질문까지 사라지면 안 되므로).
+  `calls_forward`/`calls_backward`/`shallow_neighborhood`/`changed_by_history`
+  4개 함수 전부 자기 `start_node_id`를 이 파라미터로 넘기도록 수정.
+- getter/setter로 필터링된 노드를 가리키던 엣지도 같이 제거(양 끝 노드가
+  둘 다 남아있는 엣지만 최종 결과에 포함).
+
+**의도적으로 감수한 트레이드오프**: getter/setter 노드를 지우면 그 노드를
+거쳐가던 경로의 연결이 끊길 수 있음(예: A가 getB()를 부르고 그 반환값으로
+C를 부르는 흐름이었다면, getB()를 지우는 순간 그래프 상으로는 A와 C 사이에
+아무 연결도 안 보이게 됨). "정확한 전체 그래프"보다 "읽기 쉬운 요약"을
+우선한 의도적 선택 — 실 데이터로 확인해서 너무 자주 끊긴다 싶으면 재논의
+필요.
+
+**수정한 파일:**
+- `app/graph/queries/traversal.py` — 위 구현.
+- `tests/test_graph_traversal.py` — 회귀 테스트 4개 추가: getter/setter
+  Method 노드 + 연결된 엣지가 같이 제거되는지, 시작 노드 자체가 getter여도
+  `keep_node_id`로 남는지, MethodVersion이 HAS_VERSION 소유자 이름으로
+  올바르게 판별되는지, "getaway"류 오탐이 없는지.
+
+**검증한 것:**
+- 신규 테스트 4개 + 기존 `test_graph_traversal.py` 9개 전부 통과, 회귀 없음
+  확인.
+
+**아직 안 한 것 / 팀 논의 필요:**
+- FLOW뿐 아니라 IMPACT/LOCATION/INTENT 그래프에도 전부 적용됨 — 사용자가
+  "그래프가 나올 때"라고 일반적으로 말해서 전체 적용으로 해석했는데, 만약
+  IMPACT(영향 범위) 질문에서는 getter/setter 호출도 "누가 이 필드에 의존
+  하는지" 판단에 필요한 정보일 수 있어서 이 부분은 실사용해보고 너무
+  공격적으로 지워진다 싶으면 question_kind별로 켜고 끄는 걸 고려할 것.
+- Lombok이 자동 생성하는 `equals`/`hashCode`/`toString`/`canEqual` 같은
+  다른 보일러플레이트는 이번 범위에 포함 안 함(사용자가 명시적으로 언급한
+  get/set만 처리) — 필요하면 같은 패턴으로 추가 가능.
+- 실 데이터(Neo4j)로는 검증 안 함 — fake 객체 재현 + 단위 테스트로만 확인.
+
+---
+
+## 0-17. 서로 무관한 동명 메서드가 CALLS로 잘못 이어지는 문제 ("ChatMessageStore.get() → RepositoryStore.get()"류, 2026-08-26)
+
+사용자가 스크린샷 두 장을 보고함:
+
+1. "PollCard가 호출하는 함수 알려줘" 질문에 PollCard가 아니라 PollList 관련
+   노드가 나오고, COMMIT/CLASS 노드까지 섞여서 나옴(이건 아직 미해결 — 아래
+   "아직 안 한 것" 참고).
+2. **"ChatMessageStore.get() → RepositoryStore.get() → ChatSessionStore.get()"**
+   처럼 서로 완전히 무관한 클래스의 동명(`get`) 메서드끼리 CALLS로 이어진
+   그래프가 질문과 무관하게 계속 반복해서 나타남("이거 계속 나오는데" — 사용자
+   표현).
+
+2번을 코드로 추적해서 원인을 확정하고 고침(1번은 별도 문제, 아래 참고).
+
+**원인 (정확히 특정함, 내 파일이 아닌 곳에서 시작된 문제)**:
+`app/graph/mappings.py`의 `resolve_cross_file_references()`(그래프 담당
+팀원 파일)는 CALLS 호출 대상을 이름(`(language, name)`)으로 찾는데, 호출부의
+리시버 타입을 알아낼 수 있으면(`receiver_type`) 그 타입 소속 메서드로 후보를
+좁히지만, 알아낼 수 없으면(예: `self._session.get(...)`처럼 SQLAlchemy
+`Session`처럼 이 코드베이스 밖의 타입에 대한 호출이라 `receiver_type`을
+못 알아낸 경우) **같은 이름의 메서드 전부**를 후보로 남겨서 `"ambiguous":
+True` 속성과 함께 전부에 CALLS 엣지를 만들어버림(mappings.py 599-626줄,
+"하나로 못 좁히는 것보다 넓게라도 남기는 게 낫다"는 의도적 절충). `get`처럼
+리포지토리 클래스마다 똑같이 존재하는 흔한 이름이 이 경로를 타면,
+`ChatMessageStore.get()`이 자기 자신은 물론 `RepositoryStore.get()`,
+`ChatSessionStore.get()`까지 전부 "호출"하는 것으로 그래프에 남게 됨 —
+실제로는 전혀 사실이 아님. 이 `ambiguous` 속성은
+`app/graph/repositories/code_graph.py`의 `SET relation += row.properties`로
+Neo4j 관계에 그대로 저장되는 것까지 확인함.
+
+**이미 절반은 막혀 있었다는 것도 확인함**: `app/ai/rag/nodes/evidence_enricher.py`
+(내 파일)는 이미 `metadata.get("ambiguous") is True`인 CALLS 엣지를 답변
+근거 텍스트 생성에서 제외하고 있었음 — 그래서 LLM이 쓰는 답변 문장에는 이
+오류가 안 보였음. 하지만 그래프 **시각화** 경로(`app/graph/queries/traversal.py`,
+역시 내 파일)는 같은 체크가 전혀 없어서, 근거 텍스트와 달리 화면에는 이
+가짜 CALLS 관계가 그대로 새어나가고 있었음 — 텍스트 답변과 그래프 그림이
+서로 다른 이야기를 하고 있었던 셈.
+
+**수정 방향**: `mappings.py`의 해석 알고리즘 자체(그래프 담당 팀원 소유,
+"넓게 남기기" 절충은 나름의 이유가 있어 보여서 안 건드림)는 그대로 두고,
+이미 Neo4j에 저장돼 있는 `ambiguous` 신호를 그래프 시각화 쪽에서 한 번 더
+걸러내는 방식으로 고침 — evidence_enricher.py와 완전히 동일한 기준을
+적용해서 "답변 텍스트가 신뢰하지 않는 관계는 그래프도 안 보여준다"로
+통일함. 전부 내 파일 안에서 끝나서 팀원 조율 불필요.
+
+**수정한 파일:**
+- `app/graph/queries/traversal.py` — `_is_ambiguous_call(relationship)` 신규
+  (relationship의 `ambiguous` 속성이 True인지 확인). `_path_to_graph_dict()`의
+  엣지 수집 루프에서 `CALLS`/`HTTP_CALLS` 타입이면서 ambiguous인 관계는
+  건너뜀 — getter/setter 필터(0-16)와 마찬가지로 4개 traversal 함수
+  (`calls_forward`/`calls_backward`/`shallow_neighborhood`/
+  `changed_by_history`) 전부에 자동 적용됨(공통 변환 함수라서 별도 배선
+  불필요).
+- `tests/test_graph_traversal.py` — `FakeRelationship`이 이제 속성을 받을 수
+  있도록 `dict` 상속으로 확장(`ambiguous=True` 같은 키워드 인자 지원, 기존
+  테스트는 속성 없이 그대로 호출해서 영향 없음). 회귀 테스트 3개 추가:
+  ambiguous CALLS 엣지 제외, 정상(비-ambiguous) CALLS 엣지는 그대로 유지,
+  ambiguous HTTP_CALLS도 동일하게 제외.
+
+**검증한 것:**
+- 신규 테스트 3개 + `test_graph_traversal.py` 전체(16개) 통과.
+- `pytest tests/` 전체(289개) 통과 — 회귀 없음.
+
+**아직 안 한 것 / 참고:**
+- 실 데이터(Neo4j)로는 검증 안 함 — fake 객체 재현 + 단위 테스트로만 확인.
+
+---
+
+## 0-18. 1번 스크린샷("PollCard가 호출하는 함수" → location 결과) 원인 확정 + 수정 (2026-08-26, 0-17 이어서)
+
+0-17에서 별도 문제로 남겨뒀던 1번 스크린샷("PollCard가 호출하는 함수 알려줘"에
+PollList 관련 노드 + COMMIT/CLASS가 섞이고, 메서드들이 서로 안 이어진 채
+세로로 나열되던 그래프)을 이어서 진단·수정함.
+
+**구조적으로 확정한 원인**: `calls_forward()`의 Cypher 쿼리(app/graph/queries/
+traversal.py)를 다시 확인해보니, 이 쿼리엔애초에 Commit/Class를 가져오는
+절이 하나도 없음(CALLS/HTTP_CALLS/HAS_VERSION/EXPOSES 관계만 탐) — 즉
+COMMIT/CLASS 노드가 결과에 나온 시점에서, 그 그래프는 물리적으로
+`calls_forward`가 만든 게 아니라는 뜻임. `app/adapters/qa_response_adapter.py`의
+`_graph_from()`도 확인함: FLOW 의도(intent)면 `_filtered_flow_graph()`로
+한 번 더 걸러지거나(calls/http_calls/exposes만 남음) 아예 빈 그래프로
+나가지, `state["graph_results"]`를 원본 그대로 노출하는 경로는 FLOW가 아닌
+다른 의도(EXPLANATION 등, location에 대응)일 때만 탐. 따라서 이 질문은
+사실 FLOW가 아니라 LOCATION(EXPLANATION)으로 분류돼서 `shallow_neighborhood`
+(관계 타입 제한 없이 1홉만 얕게 탐색 — CALLS뿐 아니라 HAS_VERSION/
+INTRODUCED_IN/CONTAINS까지 전부 탐)가 실행된 것으로 100% 확정함.
+
+**왜 잘못 분류됐는지**: `app/ai/generation/prompts.py`의
+`QUESTION_CLASSIFICATION_PROMPT`를 다시 읽어보니, flow 항목의 예시가
+"회원가입 요청이 들어오면 어떤 순서로 처리돼?"(처리 "순서")뿐이라, "PollCard가
+호출하는 함수 알려줘"처럼 "무엇을 호출하는지 목록으로 묻는" 질문은 flow의
+예시와 결이 달라 보여서 location의 "무슨 역할인지 묻는 질문" 쪽으로 새기
+쉬운 구조였음. 게다가 프롬프트 마지막 줄에 "애매하면 location을
+선택하세요"라는 명시적 기본값까지 있어서, 애매한 케이스가 전부 location
+쪽으로 쏠리게 돼 있었음.
+
+**수정 (`app/ai/generation/prompts.py`, 내 파일, 팀원 조율 불필요):**
+- flow 항목에 "OO가 호출하는 함수/메서드가 뭐야", "OO는 어떤 API를 호출해?"
+  같은 "무엇을 호출하는지" 묻는 질문도 flow라는 걸 명시하고, "PollCard가
+  호출하는 함수 알려줘"를 실제 예시로 추가함.
+- location 항목엔 "무엇을 호출하는지가 아니라 어디에 있는지/무슨 역할인지가
+  핵심일 때만 location"이라고 경계를 명확히 함.
+- 애매할 때의 기본값을 "무조건 location"에서 "핵심이 호출/실행이면 flow,
+  위치/역할이면 location, 그래도 애매하면 location"으로 구체화함(완전
+  제거는 안 함 — 진짜로 애매한 케이스의 안전한 기본값 자체는 유지).
+
+**한계 (LLM 프롬프트 튜닝이라 결정론적으로 검증 불가)**: 이건 실제 Azure
+OpenAI 분류 LLM 호출 결과를 바꾸는 수정이라, 이 세션에서 fake 객체로
+단위 테스트할 수 있는 종류가 아님(question_classifier.py의 기존 테스트도
+전부 Mock LLM 응답으로 QuestionClassifier 클래스의 매핑 로직만 검증하지,
+실제 프롬프트 문구가 분류 정확도를 얼마나 바꾸는지는 검증 못 함). **다음에
+실 데이터로 확인할 때 "PollCard가 호출하는 함수 알려줘"를 똑같이 다시
+물어봐서 이번엔 flow로 분류되는지, calls_forward 결과(COMMIT/CLASS 없이
+CALLS로 이어진 메서드들)가 나오는지 직접 확인 필요.**
+
+**수정한 파일:**
+- `app/ai/generation/prompts.py` — `QUESTION_CLASSIFICATION_PROMPT` 수정
+  (위 내용).
+
+**아직 안 한 것:**
+- 실제 재질문으로 검증 안 함(위 한계 참고) — 다음에 꼭 확인.
+- "PollCard"라는 이름 자체가 이 레포에 실제로 있는지(React 컴포넌트 구조상
+  PollList 안에 인라인으로 poll 카드가 그려지고 별도 PollCard 컴포넌트가
+  없을 가능성)는 확인 안 함 — 만약 없다면 분류가 flow로 맞게 고쳐져도
+  벡터 검색이 여전히 가장 가까운 대체 대상(PollList)을 고를 것이므로, 이건
+  "질문 분류" 문제와 별개로 "존재하지 않는 이름을 물었을 때 어떻게 안내할지"
+  UX 문제로 남을 수 있음.
+- `shallow_neighborhood` 자체가 (진짜 LOCATION 질문일 때도) COMMIT/CLASS를
+  포함한 여러 관계 타입을 한 번에 섞어서 보여주는 구조라, 분류가 맞아도
+  결과가 다소 산만할 수 있음 — 이번 수정 범위 밖, 필요하면 별도로 다룰 것.
+
+---
+
+## 0-19. 그래프 화면이 지저분해 보이는 문제 — FE 렌더링 버그 2건 발견 + 수정 (2026-08-26, RepoMind-FE)
+
+**배경**: 0-13~0-18에서 백엔드(노드 타입/엣지 타입/분류 프롬프트)를 계속 고쳤는데도
+사용자가 "그래프가 너무 지저분해 보인다"고 계속 얘기해서, 이번엔 FE 저장소
+(`RepoMind-FE`, `src/features/graph/CodeFlowGraph.tsx` + `src/types/api.ts`)까지
+직접 열어서 확인함. 백엔드가 최근 바꾼 노드/엣지 타입을 FE가 못 따라가고 있는
+게 실제 원인 중 하나였음.
+
+**발견한 버그 2건:**
+
+1. **FLOW 그래프에서 API 엔드포인트 노드가 통째로 떨어져 나감.**
+   `CodeFlowGraph.tsx`의 `projectFunctionCalls()`가 flow 그래프 엣지를
+   `calls` / `http_calls` / `handled_by` 세 종류만 통과시키도록 필터링하고
+   있었는데, 0-13에서 백엔드가 이 엣지 타입 이름을 `handled_by` → `exposes`로
+   바꿨음. 즉 백엔드는 이제 `exposes`를 보내는데 FE는 여전히 옛날 이름
+   `handled_by`만 찾고 있어서, exposes 엣지가 전부 조용히 걸러지고 그
+   엣지로만 연결되던 API/엔드포인트 노드들이 떠 있는 것처럼 보였음.
+2. **CLASS/METHOD/PACKAGE 등 노드 색이 안 입혀짐.**
+   `GraphNodeType`(FE 타입 정의)과 `nodeColors` 매핑이 예전 7종류
+   (`project`/`module`/`file`/`symbol`/`api`/`commit`/`document`)만 알고
+   있었는데, 백엔드는 0-13 전후로 `class`/`interface`/`method`/
+   `method_version`/`package`까지 노드 타입으로 보내고 있었음. FE가 모르는
+   타입이 오면 색이 안 입혀져서(스타일 undefined) 눈에 튀는 이상한 노드로
+   보임 — 스크린샷의 CLASS 노드가 이 케이스.
+
+**수정한 파일 (RepoMind-FE):**
+- `src/types/api.ts` — `GraphNodeType`에 `class`/`interface`/`method`/
+  `method_version`/`package` 추가.
+- `src/features/graph/CodeFlowGraph.tsx` — `nodeColors`에 위 5개 타입 색상
+  추가, flow 그래프 엣지 필터를 `handled_by` → `exposes`로 수정.
+
+**검증**: 이 세션에는 FE 빌드/테스트 환경이 없어서 코드 리뷰 수준으로만
+확인함(문법·타입 일치 확인). 실제 화면에서 API 노드가 다시 이어지는지,
+CLASS 노드에 색이 들어오는지는 앱 켜서 눈으로 재확인 필요.
+
+**아직 안 한 것 (일부러 손 안 댐):**
+- non-flow 그래프(LOCATION/IMPACT/HISTORY, 즉 `shallow_neighborhood` 등의
+  결과)를 그리는 `projectFunctionCalls()`의 else 분기는 `calls` 엣지만
+  그리고 `contains`/`implements`/`exposes`/`http_calls`/`changed_by`/
+  `documented_by` 엣지는 전부 버림 — 그리고 flow 분기와 달리 "엣지가 하나도
+  없는 노드"를 걸러내지도 않음. 그래서 COMMIT/CLASS처럼 calls가 아닌
+  관계로만 연결된 노드는 이 경로를 타는 한 앞으로도 화면에 붕 떠 보일 것.
+  이건 위 0-18에서 이미 "범위 밖"으로 남긴 `shallow_neighborhood`의 산만함
+  문제와 같은 뿌리라서, 어떤 관계 타입까지 화면에 보여줄지는 디자인 판단이
+  필요해 이번엔 안 건드림 — 필요하면 별도로 논의.
+
+---
+
 ## 1. 지금 코드 상태 (이미 되어 있는 것 / 안 되어 있는 것)
 
 - **Phase 1(배관) 완료**: `app/ai/rag/state.py`(QAState 스키마), `app/ai/rag/pipeline.py`(`build_graph()`, `run_qa_pipeline()`) 둘 다 실제로 짜여 있고, `scripts/check_pipeline_skeleton.py`로 그래프 흐름(병렬 분기 → join → 조건부 재시도 루프)이 정상 동작함을 이미 검증함. **이 두 파일은 건드릴 필요 없음** — 그대로 재사용.

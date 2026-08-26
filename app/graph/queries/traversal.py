@@ -71,6 +71,8 @@ Step 3 참고):
   - key(node)/(source,type,target) 기준으로 중복 노드·엣지 제거
 """
 
+import re
+
 from app.clients.neo4j import Neo4jClient
 from app.dtos.history_retrieval import (
     CommitHistoryMetadata,
@@ -79,6 +81,13 @@ from app.dtos.history_retrieval import (
 
 DEFAULT_CALLS_DEPTH = 5
 DEFAULT_NEIGHBORHOOD_DEPTH = 2
+
+# 2026-08-26 신규: getter/setter는 그래프 시각화에서 대부분 "부가적인" 노드라
+# 오히려 흐름을 읽기 어렵게 만든다는 피드백을 받아서 걸러냄 (아래
+# _is_trivial_accessor_name / _path_to_graph_dict의 keep_node_id 참고).
+# "get"/"set" 뒤에 대문자·숫자가 바로 오는 것만 매치해서 "getaway"/"setup"/
+# "issueRefund"같은 일반 단어는 안 걸리게 함.
+_TRIVIAL_ACCESSOR_NAME_PATTERN = re.compile(r"^(get|set|is)[A-Z0-9]")
 
 
 def calls_forward(
@@ -101,7 +110,7 @@ def calls_forward(
     RETURN path, owner_path, start_endpoint_path, endpoint_path, downstream_path
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
-    return _path_to_graph_dict(result.records)
+    return _path_to_graph_dict(result.records, keep_node_id=start_node_id)
 
 
 def calls_backward(
@@ -117,7 +126,7 @@ def calls_backward(
     RETURN path
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
-    return _path_to_graph_dict(result.records)
+    return _path_to_graph_dict(result.records, keep_node_id=start_node_id)
 
 
 def shallow_neighborhood(
@@ -131,7 +140,7 @@ def shallow_neighborhood(
     RETURN path
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
-    return _path_to_graph_dict(result.records)
+    return _path_to_graph_dict(result.records, keep_node_id=start_node_id)
 
 
 def changed_by_history(client: Neo4jClient, start_node_id: str) -> dict:
@@ -153,7 +162,9 @@ def changed_by_history(client: Neo4jClient, start_node_id: str) -> dict:
     RETURN history, deletion
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
-    return _path_to_graph_dict(result.records, include_history_metadata=True)
+    return _path_to_graph_dict(
+        result.records, include_history_metadata=True, keep_node_id=start_node_id
+    )
 
 
 def _looks_like_path(value) -> bool:
@@ -188,6 +199,10 @@ def _node_type(node) -> str:
         return "interface"
     if "Class" in labels:
         return "class"
+    if "File" in labels:
+        return "file"
+    if "Package" in labels:
+        return "package"
     return "symbol"
 
 
@@ -242,6 +257,14 @@ def _node_label(node, method_version_owner: dict | None = None) -> str:
     if "Commit" in labels:
         sha = node.get("sha", "")
         return sha[:8] if sha else node.get("key", "")
+    if "File" in labels:
+        # File 노드엔 "name" 프로퍼티가 없고 "path"만 있어서(app/graph/mappings.py
+        # 참고), 이 분기가 없으면 아래 최종 폴백(node.get("name") or node.get("key"))이
+        # 둘 다 실패해서 내부 그래프 key(예: "123231656:file:...")가 그대로
+        # 라벨로 노출되는 문제가 있었음(2026-08-24 발견) — 파일명만 보여줌
+        # (전체 경로는 _node_detail에 남겨서 필요하면 볼 수 있게 함).
+        path = node.get("path", "")
+        return path.rsplit("/", 1)[-1] if path else node.get("key", "")
     return node.get("name") or node.get("key", "")
 
 
@@ -255,6 +278,8 @@ def _node_detail(node) -> str | None:
         return node.get("path")
     if "Commit" in labels:
         return node.get("sha")
+    if "File" in labels:
+        return node.get("path")
     return None
 
 
@@ -295,6 +320,19 @@ def _to_graph_node(
     }
 
 
+def _is_ambiguous_call(relationship) -> bool:
+    """app/graph/mappings.py의 resolve_cross_file_references()가 이름만으로는
+    호출 대상을 하나로 못 좁혔을 때 "ambiguous": True 속성과 함께 후보 전부에
+    CALLS/HTTP_CALLS 엣지를 만들어 둔 것인지 판별한다.
+
+    app/ai/rag/nodes/evidence_enricher.py가 이미 같은 기준으로 이런 엣지를
+    답변 근거에서 제외하고 있음 — 그래프 시각화도 같은 기준을 따르게 해서
+    "ChatMessageStore.get()이 RepositoryStore.get()을 호출한다"처럼 실제로는
+    확인되지 않은 관계가 그림으로만 새어나가는 걸 막는다.
+    """
+    return hasattr(relationship, "get") and relationship.get("ambiguous") is True
+
+
 def _to_graph_edge(relationship) -> dict:
     source_key = relationship.start_node.get("key")
     target_key = relationship.end_node.get("key")
@@ -309,6 +347,28 @@ def _to_graph_edge(relationship) -> dict:
     if properties:
         edge["metadata"] = properties
     return edge
+
+
+def _is_trivial_accessor_name(name: str | None) -> bool:
+    """Java Bean 스타일 getter/setter(및 boolean is-getter) 이름인지 판별."""
+    return bool(name) and bool(_TRIVIAL_ACCESSOR_NAME_PATTERN.match(name))
+
+
+def _effective_method_name(node, method_version_owner: dict | None) -> str | None:
+    """노드가 getter/setter인지 판단할 때 쓸 "실제 메서드 이름".
+
+    Method 노드는 자기 name을 그대로 쓰고, MethodVersion은 자기 이름이 없어서
+    (_node_label과 동일하게) HAS_VERSION으로 연결된 부모 Method의 이름을
+    빌려온다. 그 외 노드 타입(Class/Endpoint/Commit/File/...)은 애초에
+    getter/setter 판별 대상이 아니므로 None을 반환해서 필터링 대상에서 제외.
+    """
+    labels = node.labels
+    if "Method" in labels:
+        return node.get("name")
+    if "MethodVersion" in labels:
+        owner = (method_version_owner or {}).get(node.get("key"))
+        return owner.get("name") if owner else None
+    return None
 
 
 def _collect_method_version_owners(records: list) -> dict:
@@ -340,9 +400,48 @@ def _collect_method_version_owners(records: list) -> dict:
 
 
 def _path_to_graph_dict(
-    records: list, *, include_history_metadata: bool = False
+    records: list,
+    *,
+    include_history_metadata: bool = False,
+    keep_node_id: str | None = None,
 ) -> dict:
-    """Neo4j 쿼리 결과 레코드 리스트를 GraphData 호환 {"nodes", "edges"} dict로 변환."""
+    """Neo4j 쿼리 결과 레코드 리스트를 GraphData 호환 {"nodes", "edges"} dict로 변환.
+
+    keep_node_id: 이 탐색의 시작 노드 key. getter/setter 필터링(아래 참고)
+    대상이더라도 사용자가 직접 물어본 대상이면 무조건 남긴다 — 예를 들어
+    "getCurrentUser() 흐름을 알려줘"처럼 시작점 자체가 getter인 질문에서까지
+    그 노드가 사라지면 안 되기 때문.
+
+    2026-08-26 신규: getter/setter(Method/MethodVersion 한정, 이름이
+    "get"/"set"/"is" + 대문자·숫자로 시작하는 패턴 — _is_trivial_accessor_name
+    참고)는 대부분 실행 흐름의 "부가적인" 노드라 그래프를 오히려 읽기 어렵게
+    만든다는 피드백을 받아서 결과에서 제외한다. 노드를 지우면 그 노드에 걸린
+    엣지도 같이 끊어지므로(예: A -> getB() -> C였다면 A-C 사이 연결 자체가
+    사라짐), 이건 의도적으로 감수하는 손실이다 — "정확한 전체 그래프"보다
+    "읽기 쉬운 요약"을 우선한 선택. 실 데이터로 확인해서 너무 많이 끊긴다
+    싶으면 조정할 것.
+
+    2026-08-26 신규 (같은 날 두 번째 발견): "ChatMessageStore.get() ->
+    RepositoryStore.get() -> ChatSessionStore.get()"처럼 서로 무관한 클래스의
+    동명 메서드끼리 CALLS로 잘못 이어져서 반복적으로 나타나는 문제를 사용자가
+    스크린샷으로 제보함. 원인은 이 파일이 아니라 app/graph/mappings.py의
+    resolve_cross_file_references()(그래프 담당 팀원 파일)에 있음 — CALLS
+    호출 대상 이름이 "get"처럼 아주 흔하고, 호출부의 리시버 타입을 모르는
+    경우(예: self._session.get(...)처럼 외부 라이브러리 객체에 대한 호출이라
+    receiver_type을 못 알아낸 경우) 같은 이름의 메서드 *전부*를 후보로 남겨
+    "ambiguous": True 속성과 함께 전부 CALLS 엣지로 이어버림(하나로 못 좁히는
+    것보다 넓게라도 남기는 게 낫다는 절충 — mappings.py 자체 주석 참고). 이
+    속성은 Neo4j 관계에 그대로 저장됨(app/graph/repositories/code_graph.py의
+    `SET relation += row.properties`).
+    app/ai/rag/nodes/evidence_enricher.py는 이미 이 "ambiguous" 관계를 신뢰할
+    수 없다고 보고 답변 근거 텍스트에서 제외하고 있었는데(LLM이 만드는 답변
+    문장은 그래서 이 오류가 안 보임), 그래프 *시각화* 경로(이 파일)는 같은
+    체크가 없어서 근거 텍스트와 달리 화면에는 그대로 새어나가고 있었음 — 그
+    불일치를 여기서 맞춤. mappings.py의 해석 알고리즘 자체(그래프 담당
+    팀원 소유)는 안 건드리고, 이미 Neo4j에 저장된 "ambiguous" 신호를 내
+    파일에서 한 번 더 걸러내는 방식으로 고침(evidence_enricher.py와 동일한
+    기준, 최소 침습).
+    """
     nodes_by_id: dict[str, dict] = {}
     edges_by_key: dict[tuple, dict] = {}
     method_version_owner = _collect_method_version_owners(records)
@@ -353,13 +452,22 @@ def _path_to_graph_dict(
                 continue
             for node in value.nodes:
                 key = node.get("key")
-                if key and key not in nodes_by_id:
-                    nodes_by_id[key] = _to_graph_node(
-                        node,
-                        include_history_metadata=include_history_metadata,
-                        method_version_owner=method_version_owner,
-                    )
+                if not key or key in nodes_by_id:
+                    continue
+                if key != keep_node_id and _is_trivial_accessor_name(
+                    _effective_method_name(node, method_version_owner)
+                ):
+                    continue
+                nodes_by_id[key] = _to_graph_node(
+                    node,
+                    include_history_metadata=include_history_metadata,
+                    method_version_owner=method_version_owner,
+                )
             for relationship in value.relationships:
+                if relationship.type in ("CALLS", "HTTP_CALLS") and _is_ambiguous_call(
+                    relationship
+                ):
+                    continue
                 edge_key = (
                     relationship.start_node.get("key"),
                     relationship.type,
@@ -368,4 +476,12 @@ def _path_to_graph_dict(
                 if edge_key not in edges_by_key:
                     edges_by_key[edge_key] = _to_graph_edge(relationship)
 
-    return {"nodes": list(nodes_by_id.values()), "edges": list(edges_by_key.values())}
+    # getter/setter로 걸러진 노드를 가리키던 엣지는 양 끝 중 하나가
+    # nodes_by_id에 없는 상태로 남으므로 여기서 같이 정리한다.
+    edges = [
+        edge
+        for edge in edges_by_key.values()
+        if edge["source"] in nodes_by_id and edge["target"] in nodes_by_id
+    ]
+
+    return {"nodes": list(nodes_by_id.values()), "edges": edges}

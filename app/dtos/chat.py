@@ -30,7 +30,10 @@ class GraphNode:
     # Interface를 구분 가능하게 세분화함 (app/graph/queries/traversal.py의
     # _node_type() 참고) — FE에서 노드 종류별로 배지/아이콘을 다르게
     # 그릴 수 있게 하기 위함. "symbol"은 방어적 기본값으로 유지.
-    type: Literal["api", "symbol", "commit", "method", "method_version", "class", "interface"]
+    type: Literal[
+        "api", "symbol", "commit", "method", "method_version", "class", "interface",
+        "file", "package",
+    ]
     label: str
     detail: str | None = None
 
@@ -48,7 +51,7 @@ class GraphEdge:
 class GraphData:
     """Public graph contract.
 
-    ``kind == 'flow'`` exposes only ``calls``, ``http_calls``, and ``handled_by``
+    ``kind == 'flow'`` exposes only ``calls``, ``http_calls``, and ``exposes``
     edges. Every node must be an endpoint or a method connected to one of them.
     """
 

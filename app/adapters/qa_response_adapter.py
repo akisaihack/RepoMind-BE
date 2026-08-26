@@ -46,6 +46,12 @@ _GRAPH_NODE_TYPES = {
     "method_version",
     "class",
     "interface",
+    # 2026-08-24 추가 (같은 날 두 번째 라운드): File/Package도 세분화 —
+    # 전에는 File 노드가 "symbol"로 뭉개지면서 라벨도 못 찾아서 내부
+    # 그래프 key가 그대로 노출되는 별도 버그가 있었음(shallow_neighborhood로
+    # "location" 질문에 답할 때 실제로 재현됨).
+    "file",
+    "package",
 }
 _EVIDENCE_TYPES = {"code", "itsm", "commit"}
 _FLOW_EDGE_TYPES = {"calls", "http_calls", "handled_by"}

@@ -77,6 +77,46 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
     assert serialized["suggestedQuestions"] == ["이 흐름을 수정하면 영향 범위가 어떻게 돼?"]
 
 
+def test_flow_graph_keeps_endpoint_nodes_reached_via_exposes_edge() -> None:
+    # 2026-08-26 회귀 테스트: _FLOW_EDGE_TYPES가 원래 "handled_by"를 갖고 있었는데,
+    # Method->Endpoint 관계로 실제 쓰이는 타입은 "EXPOSES"뿐이라서(코드 어디에도
+    # "HANDLED_BY"를 만드는 곳이 없음) EXPOSES 엣지가 전부 조용히 걸러지고
+    # 엔드포인트 노드가 그래프에서 통째로 사라지는 문제가 있었음. "exposes"로
+    # 고친 뒤에는 엔드포인트 노드와 엣지가 그대로 살아남아야 함.
+    response = QueryResponse(
+        answer="취소 요청은 /api/cancel 엔드포인트에서 처리됩니다.",
+        intent=QueryIntent.FLOW,
+        visualization=GraphResponse(
+            type=VisualizationType.CALL_FLOW,
+            nodes=[
+                GraphNode(id="method:1", type="METHOD", label="CancelController.cancel"),
+                GraphNode(id="endpoint:1", type="API", label="POST /api/cancel"),
+            ],
+            edges=[
+                {
+                    "id": "edge:1",
+                    "source": "method:1",
+                    "target": "endpoint:1",
+                    "type": "EXPOSES",
+                }
+            ],
+        ),
+    )
+    state = {
+        "question": "취소 요청은 어느 엔드포인트에서 처리돼?",
+        "github_repository_id": 1,
+        "is_sufficient": True,
+        "evidence": [],
+        "graph_results": {"nodes": [], "edges": []},
+    }
+
+    result = QAResponseAdapter().adapt(state, response)
+
+    assert {node.id for node in result.graph.nodes} == {"method:1", "endpoint:1"}
+    assert result.graph.edges[0].type == "exposes"
+    assert result.graph.kind == "flow"
+
+
 def test_uses_llm_generated_claims_without_copying_summary() -> None:
     response = QueryResponse(
         answer="JWT 요청 인증 흐름입니다.",
