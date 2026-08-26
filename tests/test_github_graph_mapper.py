@@ -1,5 +1,7 @@
 """GitHub DTO to Neo4j graph batch mapping tests."""
 
+from dataclasses import replace
+
 from app.dtos.github import (
     BranchDTO,
     CommitDTO,
@@ -109,8 +111,67 @@ def test_maps_nodes_relationships_and_file_change_id() -> None:
             "properties": {},
         },
     )
+    assert {row["toKey"] for row in graph.pull_request_commits} == {
+        "100:commit:abc123",
+        "100:commit:merge123",
+    }
     assert len(graph.developers) == 2
     assert graph.developer_commits[0]["githubId"] == 2
+
+
+def test_infers_merge_commit_from_standard_commit_message_when_api_sha_is_missing() -> None:
+    history = _history()
+    pull_request = replace(history.pull_requests[0], merge_commit_sha=None)
+    merge_commit = CommitDTO(
+        "merge-fallback",
+        "Merge pull request #9 from org/feature\n\nPR",
+        "https://github.com/org/repo/commit/merge-fallback",
+        "Developer",
+        2,
+        "developer",
+        "2026-08-02T00:00:00Z",
+        "2026-08-02T00:00:00Z",
+        ("base-parent", "abc123"),
+        (),
+    )
+    history = replace(
+        history,
+        pull_requests=(pull_request,),
+        commits=(*history.commits, merge_commit),
+    )
+
+    graph = GitHubGraphMapper().map(history, {})
+
+    assert {
+        row["toKey"]
+        for row in graph.pull_request_commits
+        if row["fromKey"] == "100:pr:9"
+    } == {
+        "100:commit:abc123",
+        "100:commit:merge-fallback",
+    }
+
+
+def test_does_not_treat_single_parent_commit_message_as_merge_commit() -> None:
+    history = _history()
+    pull_request = replace(history.pull_requests[0], merge_commit_sha=None)
+    ordinary_commit = replace(
+        history.commits[0],
+        sha="ordinary",
+        message="Merge pull request #9 from text copied into a normal commit",
+        parent_shas=("parent123",),
+    )
+    history = replace(
+        history,
+        pull_requests=(pull_request,),
+        commits=(*history.commits, ordinary_commit),
+    )
+
+    graph = GitHubGraphMapper().map(history, {})
+
+    assert "100:commit:ordinary" not in {
+        row["toKey"] for row in graph.pull_request_commits
+    }
 
 
 def test_deduplicates_files_and_developers() -> None:

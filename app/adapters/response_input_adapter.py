@@ -57,7 +57,10 @@ class ResponseInputAdapter:
             context=RetrievedContext(
                 code=list(state.get("vector_results", [])),
                 graph=_normalize_graph_relations(graph_nodes, graph_edges),
-                history=[item.model_dump(exclude_none=True) for item in history],
+                history=[
+                    item.model_dump(exclude_none=True, exclude_defaults=True)
+                    for item in history
+                ],
                 evidence=evidence,
             ),
         )

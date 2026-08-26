@@ -1,5 +1,6 @@
 """Map normalized GitHub history into Neo4j node and relationship batches."""
 
+import re
 from typing import Any
 
 from app.dtos.github import DevelopmentHistoryDTO
@@ -11,6 +12,10 @@ from app.graph.identifiers import (
     repository_scoped_key,
 )
 from app.graph.models import GitHubGraphData, GraphRow
+
+_MERGE_PULL_REQUEST_PATTERN = re.compile(
+    r"^Merge pull request #(?P<number>\d+)\b", re.MULTILINE
+)
 
 
 class GitHubGraphMapper:
@@ -54,6 +59,9 @@ class GitHubGraphMapper:
         developer_issues: list[GraphRow] = []
         developer_pull_requests: list[GraphRow] = []
         developer_commits: list[GraphRow] = []
+        merge_commit_shas_by_pull_request = _merge_commit_shas_by_pull_request(
+            history
+        )
 
         def ensure_commit(sha: str) -> str:
             key = repository_scoped_key(repository_id, "commit", sha)
@@ -152,13 +160,17 @@ class GitHubGraphMapper:
                     {"githubId": pull_request.author_id, "toKey": key, "properties": {}}
                 )
 
-            for sha in pull_request.commit_shas:
+            related_commit_shas = set(pull_request.commit_shas)
+            if pull_request.merge_commit_sha:
+                related_commit_shas.add(pull_request.merge_commit_sha)
+            related_commit_shas.update(
+                merge_commit_shas_by_pull_request.get(pull_request.number, set())
+            )
+            for sha in sorted(related_commit_shas):
                 pull_request_commits.append(
                     {"fromKey": key, "toKey": ensure_commit(sha), "properties": {}}
                 )
             ensure_commit(pull_request.head_sha)
-            if pull_request.merge_commit_sha:
-                ensure_commit(pull_request.merge_commit_sha)
 
             for file in pull_request.files:
                 file_key = ensure_file(file.filename)
@@ -236,6 +248,22 @@ class GitHubGraphMapper:
             developer_pull_requests=tuple(developer_pull_requests),
             developer_commits=tuple(developer_commits),
         )
+
+
+def _merge_commit_shas_by_pull_request(
+    history: DevelopmentHistoryDTO,
+) -> dict[int, set[str]]:
+    """Infer GitHub merge commits when the PR API omits merge_commit_sha."""
+    result: dict[int, set[str]] = {}
+    for commit in history.commits:
+        if len(commit.parent_shas) < 2:
+            continue
+        match = _MERGE_PULL_REQUEST_PATTERN.search(commit.message)
+        if match is None:
+            continue
+        pull_request_number = int(match.group("number"))
+        result.setdefault(pull_request_number, set()).add(commit.sha)
+    return result
 
 
 def _properties(**values: Any) -> dict[str, Any]:

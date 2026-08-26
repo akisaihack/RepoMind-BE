@@ -77,6 +77,43 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
     assert serialized["suggestedQuestions"] == ["이 흐름을 수정하면 영향 범위가 어떻게 돼?"]
 
 
+def test_preserves_pull_request_issue_and_legacy_itsm_evidence_types() -> None:
+    response = QueryResponse(answer="변경 이유", intent=QueryIntent.HISTORY)
+    state = {
+        "question": "왜 변경됐어?",
+        "github_repository_id": 1,
+        "is_sufficient": True,
+        "evidence": [
+            {
+                "id": "pr:5",
+                "type": "pr",
+                "title": "PR #5",
+                "location": "https://github.com/org/repo/pull/5",
+                "description": "merged",
+            },
+            {
+                "id": "issue:4",
+                "type": "issue",
+                "title": "Issue #4",
+                "location": "https://github.com/org/repo/issues/4",
+                "description": "resolved",
+            },
+            {
+                "id": "legacy:1",
+                "type": "itsm",
+                "title": "Legacy",
+                "location": "",
+                "description": "stored response compatibility",
+            },
+        ],
+        "graph_results": {"nodes": [], "edges": []},
+    }
+
+    result = QAResponseAdapter().adapt(state, response)
+
+    assert [item.type for item in result.evidence] == ["pr", "issue", "itsm"]
+
+
 def test_flow_graph_keeps_endpoint_nodes_reached_via_exposes_edge() -> None:
     # 2026-08-26 회귀 테스트: _FLOW_EDGE_TYPES가 원래 "handled_by"를 갖고 있었는데,
     # Method->Endpoint 관계로 실제 쓰이는 타입은 "EXPOSES"뿐이라서(코드 어디에도

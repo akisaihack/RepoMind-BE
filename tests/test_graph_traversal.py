@@ -8,13 +8,14 @@ from app.graph.queries.traversal import (
     _path_to_graph_dict,
     calls_backward,
     calls_forward,
+    changed_by_history,
 )
 
 
 class FakeNode(dict):
-    def __init__(self, labels: set[str], **properties):
+    def __init__(self, node_labels: set[str], **properties):
         super().__init__(properties)
-        self.labels = labels
+        self.labels = node_labels
 
 
 class FakeRelationship(dict):
@@ -118,6 +119,73 @@ def test_preserves_method_version_and_commit_history_metadata() -> None:
             "label": "INTRODUCED_IN",
         }
     ]
+
+
+def test_history_traversal_includes_pull_requests_and_issues() -> None:
+    client = MagicMock()
+    client.execute_query.return_value = SimpleNamespace(records=[])
+
+    changed_by_history(client, "method:authenticate")
+
+    query = client.execute_query.call_args.args[0]
+    assert "(history_pr:PullRequest)-[:CONTAINS_COMMIT]->(history_commit)" in query
+    assert "(history_pr)-[:RESOLVES|REFERENCES]->(:Issue)" in query
+    assert "(deletion_pr:PullRequest)-[:CONTAINS_COMMIT]->(deletion_commit)" in query
+
+
+def test_preserves_pull_request_and_issue_history_metadata() -> None:
+    commit = FakeNode({"Commit"}, key="commit:abc", sha="abc123", message="fix")
+    pull_request = FakeNode(
+        {"PullRequest"},
+        key="pr:42",
+        number=42,
+        title="Prevent duplicate votes",
+        body="Reject a second vote from the same user.",
+        state="closed",
+        url="https://github.com/org/repo/pull/42",
+        merged=True,
+        mergedAt="2026-08-10T10:00:00Z",
+    )
+    issue = FakeNode(
+        {"Issue"},
+        key="issue:35",
+        number=35,
+        title="Duplicate votes are accepted",
+        body="A user can vote twice.",
+        state="closed",
+        url="https://github.com/org/repo/issues/35",
+        labels=["bug"],
+    )
+
+    result = _path_to_graph_dict(
+        [
+            {
+                "pull_request": FakePath(
+                    [pull_request, commit],
+                    [FakeRelationship(pull_request, commit, "CONTAINS_COMMIT")],
+                ),
+                "issue": FakePath(
+                    [pull_request, issue],
+                    [FakeRelationship(pull_request, issue, "RESOLVES")],
+                ),
+            }
+        ],
+        include_history_metadata=True,
+    )
+
+    nodes = {node["id"]: node for node in result["nodes"]}
+    assert nodes["pr:42"]["metadata"] == {
+        "node_type": "PullRequest",
+        "number": 42,
+        "title": "Prevent duplicate votes",
+        "body": "Reject a second vote from the same user.",
+        "state": "closed",
+        "url": "https://github.com/org/repo/pull/42",
+        "merged": True,
+        "merged_at": "2026-08-10T10:00:00Z",
+    }
+    assert nodes["issue:35"]["metadata"]["node_type"] == "Issue"
+    assert nodes["issue:35"]["metadata"]["labels"] == ["bug"]
 
 
 def test_omits_large_history_metadata_from_non_history_traversal() -> None:
