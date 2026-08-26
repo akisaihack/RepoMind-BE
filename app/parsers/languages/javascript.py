@@ -221,27 +221,7 @@ def _build_module_class_result(
 ) -> JavaScriptClassResult | None:
     methods: list[JavaScriptMethodResult] = []
 
-    for child in root_node.children:
-        declaration = _unwrap_export(child)
-
-        if declaration.type == "function_declaration":
-            methods.append(_method_result_from_node(declaration, source_bytes))
-            continue
-
-        if declaration.type in ("lexical_declaration", "variable_declaration"):
-            for declarator in declaration.children:
-                if declarator.type != "variable_declarator":
-                    continue
-                value_node = get_child_by_field(declarator, "value")
-                if value_node is None or value_node.type not in _TOP_LEVEL_FUNCTION_VALUE_TYPES:
-                    continue
-                name_node = get_child_by_field(declarator, "name")
-                name = get_node_text(name_node, source_bytes) if name_node else None
-                methods.append(
-                    _method_result_from_node(
-                        value_node, source_bytes, name_override=name, span_node=declarator
-                    )
-                )
+    _collect_module_functions(root_node, source_bytes, methods)
 
     if not methods:
         return None
@@ -258,6 +238,42 @@ def _build_module_class_result(
         methods=tuple(methods),
         qualified_name=module_name,
     )
+
+
+def _collect_module_functions(
+    node: Node,
+    source_bytes: bytes,
+    methods: list[JavaScriptMethodResult],
+) -> None:
+    """클래스 밖의 이름 있는 함수를 재귀 탐색한다.
+
+    IIFE 내부 선언도 모듈 심볼로 보존하되, 익명 콜백과 클래스 멤버는 각각
+    안정적인 이름이 없거나 별도 클래스 파서가 담당하므로 제외한다.
+    """
+    declaration = _unwrap_export(node)
+    if declaration is not node:
+        _collect_module_functions(declaration, source_bytes, methods)
+        return
+    if node.type == "class_declaration":
+        return
+    if node.type == "function_declaration":
+        method = _method_result_from_node(node, source_bytes)
+        if method.name:
+            methods.append(method)
+    elif node.type == "variable_declarator":
+        value_node = get_child_by_field(node, "value")
+        if value_node is not None and value_node.type in _TOP_LEVEL_FUNCTION_VALUE_TYPES:
+            name_node = get_child_by_field(node, "name")
+            name = get_node_text(name_node, source_bytes) if name_node else None
+            if name:
+                methods.append(
+                    _method_result_from_node(
+                        value_node, source_bytes, name_override=name, span_node=node
+                    )
+                )
+
+    for child in node.children:
+        _collect_module_functions(child, source_bytes, methods)
 
 
 # ---------- 메서드/함수 레벨 (클래스 메서드 + 최상위 함수 공용) ----------

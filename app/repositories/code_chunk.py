@@ -9,7 +9,7 @@ commit_file_change.py와 동일한 책임 분리 패턴).
 from datetime import UTC, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Float, bindparam, cast, select
+from sqlalchemy import Float, bindparam, cast, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -105,6 +105,24 @@ class CodeChunkRepository:
         statement = select(CodeChunk).where(
             CodeChunk.github_repository_id == github_repository_id,
             CodeChunk.graph_node_id.in_(graph_node_ids),
+        )
+        return list(self._session.scalars(statement).all())
+
+    def find_by_exact_symbol_names(
+        self,
+        github_repository_id: int,
+        names: list[str],
+    ) -> list[CodeChunk]:
+        """Return repository chunks whose method or owning class exactly matches a name."""
+        if not names:
+            return []
+        statement = (
+            select(CodeChunk)
+            .where(
+                CodeChunk.github_repository_id == github_repository_id,
+                or_(CodeChunk.method_name.in_(names), CodeChunk.class_name.in_(names)),
+            )
+            .order_by(CodeChunk.updated_at.desc())
         )
         return list(self._session.scalars(statement).all())
 

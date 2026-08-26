@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SelectionSource(StrEnum):
+    EXACT_SYMBOL = "EXACT_SYMBOL"
     SINGLE_CANDIDATE = "SINGLE_CANDIDATE"
     SCORE = "SCORE"
     LLM = "LLM"
@@ -34,4 +35,3 @@ class SelectedTarget(BaseModel):
     selection_source: SelectionSource
     selection_reason: str
     confidence: float = Field(ge=0, le=1)
-

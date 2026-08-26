@@ -81,6 +81,8 @@ class QAState(TypedDict):
 
     # --- ② Entity Resolver가 채움 ---
     entity_candidates: NotRequired[list[EntityCandidate]]
+    explicit_symbol_names: NotRequired[list[str]]
+    symbol_results: NotRequired[list[VectorHit]]
 
     # --- ③ Vector Retriever가 채움 ---
     vector_results: NotRequired[list[VectorHit]]
@@ -99,6 +101,7 @@ class QAState(TypedDict):
 
     # --- ⑤ Evidence Validator가 채움 (조건부 엣지 분기 기준) ---
     is_sufficient: NotRequired[bool]
+    evidence_validation_reason: NotRequired[str | None]
     retry_count: NotRequired[int]
 
     # --- ⑥ Response Composer가 채움 (최종 출력) ---
