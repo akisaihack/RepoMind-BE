@@ -29,7 +29,22 @@ class TargetSelector:
     def __init__(self, selector: StructuredSelector | None = None) -> None:
         self._selector = selector
 
-    def select(self, question: str, candidates: list[VectorHit]) -> SelectedTarget | None:
+    def select(
+        self,
+        question: str,
+        candidates: list[VectorHit],
+        *,
+        exact_candidates: list[VectorHit] | None = None,
+        symbol_names: list[str] | None = None,
+    ) -> SelectedTarget | None:
+        if exact_candidates:
+            candidate = _best_exact_candidate(exact_candidates, symbol_names or [])
+            return _selected(
+                candidate,
+                SelectionSource.EXACT_SYMBOL,
+                "질문에서 식별한 코드 심볼과 정확히 일치",
+                1,
+            )
         if not candidates:
             return None
         if len(candidates) == 1:
@@ -138,3 +153,18 @@ def _selected(
 
 def _fallback(candidate: VectorHit, reason: str) -> SelectedTarget:
     return _selected(candidate, SelectionSource.FALLBACK, reason, 0)
+
+
+def _best_exact_candidate(
+    candidates: list[VectorHit], symbol_names: list[str]
+) -> VectorHit:
+    priority = {name: len(symbol_names) - index for index, name in enumerate(symbol_names)}
+
+    def score(candidate: VectorHit) -> tuple[int, int, float]:
+        method_score = priority.get(candidate.get("method_name") or "", 0)
+        class_score = priority.get(candidate.get("class_name") or "", 0)
+        text = candidate.get("text", "")
+        supporting_names = sum(name in text for name in symbol_names)
+        return (method_score * 2 + class_score, supporting_names, candidate["similarity"])
+
+    return max(candidates, key=score)

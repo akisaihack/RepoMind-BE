@@ -82,6 +82,28 @@ def test_skips_chunk_lookup_for_empty_method_version_ids() -> None:
     session.scalars.assert_not_called()
 
 
+def test_finds_repository_chunks_by_exact_symbol_names() -> None:
+    session = Mock()
+    chunks = [Mock(method_name="requestExport")]
+    result = Mock()
+    result.all.return_value = chunks
+    session.scalars.return_value = result
+
+    found = CodeChunkRepository(session).find_by_exact_symbol_names(
+        100, ["requestExport", "spinKey"]
+    )
+
+    assert found == chunks
+    session.scalars.assert_called_once()
+
+
+def test_skips_exact_symbol_lookup_without_candidates() -> None:
+    session = Mock()
+
+    assert CodeChunkRepository(session).find_by_exact_symbol_names(100, []) == []
+    session.scalars.assert_not_called()
+
+
 def test_searches_repository_chunks_by_cosine_distance() -> None:
     session = Mock()
     chunk = Mock()

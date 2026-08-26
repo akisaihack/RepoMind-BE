@@ -1,5 +1,8 @@
 """분석 대상 선택기의 휴리스틱·LLM·fallback 동작 검증."""
 
+from unittest.mock import patch
+
+from app.ai.rag.nodes.target_selector import select_target
 from app.ai.target_selector import TargetSelector
 from app.dtos.target_selection import SelectionSource, TargetSelectionDecision
 
@@ -34,6 +37,40 @@ def _hit(method: str, similarity: float, api_path: str | None = None) -> dict:
 
 def test_returns_none_without_candidates() -> None:
     assert TargetSelector().select("질문", []) is None
+
+
+def test_exact_method_name_wins_over_unrelated_vector_candidate() -> None:
+    vector = _hit("test_pre_delete_skips_plugin_table_when_absent", 0.9)
+    exact = _hit("requestExport", 1.0)
+
+    result = TargetSelector().select(
+        "requestExport 함수에서 spinKey를 제거한 이유는?",
+        [vector],
+        exact_candidates=[exact],
+        symbol_names=["requestExport", "spinKey"],
+    )
+
+    assert result.method_name == "requestExport"
+    assert result.selection_source is SelectionSource.EXACT_SYMBOL
+
+
+def test_exact_candidate_node_skips_azure_selector_creation(app) -> None:
+    exact = _hit("requestExport", 1.0)
+
+    with app.app_context(), patch(
+        "app.ai.rag.nodes.target_selector.create_azure_target_selector"
+    ) as create_selector:
+        result = select_target(
+            {
+                "question": "requestExport 함수에서 spinKey를 제거한 이유는?",
+                "symbol_results": [exact],
+                "explicit_symbol_names": ["requestExport", "spinKey"],
+                "vector_results": [_hit("unrelatedTest", 0.9)],
+            }
+        )
+
+    create_selector.assert_not_called()
+    assert result["selected_target"]["method_name"] == "requestExport"
 
 
 def test_skips_llm_for_single_or_clear_score_candidate() -> None:
@@ -75,4 +112,3 @@ def test_llm_failure_falls_back_to_vector_top_one() -> None:
 
     assert result.method_name == "registerUser"
     assert result.selection_source is SelectionSource.FALLBACK
-
