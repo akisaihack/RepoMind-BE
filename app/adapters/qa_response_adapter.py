@@ -33,7 +33,20 @@ _SUGGESTED_QUESTIONS_BY_INTENT = {
     QueryIntent.EXPLANATION: ["이 코드가 호출되는 흐름을 알려줘."],
 }
 
-_GRAPH_NODE_TYPES = {"api", "symbol", "commit"}
+_GRAPH_NODE_TYPES = {
+    "api",
+    "symbol",
+    "commit",
+    # 2026-08-24 추가: app/graph/queries/traversal.py의 _node_type()이
+    # Method/MethodVersion/Class/Interface를 "symbol" 하나로 뭉치던 걸
+    # 세분화함 — 여기서도 화이트리스트를 같이 넓혀야 새 타입이 화이트리스트에
+    # 안 걸려서 "symbol"로 도로 뭉개지는 일이 없음(app/dtos/chat.py의
+    # GraphNode.type Literal도 같이 넓혔음).
+    "method",
+    "method_version",
+    "class",
+    "interface",
+}
 _EVIDENCE_TYPES = {"code", "itsm", "commit"}
 _FLOW_EDGE_TYPES = {"calls", "http_calls", "handled_by"}
 _QUESTION_KIND_BY_INTENT = {

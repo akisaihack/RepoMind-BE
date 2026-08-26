@@ -49,13 +49,24 @@ Step 3 참고):
   neo4j.graph.Path와 duck-typing으로 호환, 테스트에서 가짜 객체로 대체하기
   쉽게 isinstance 대신 hasattr로 판별)을 찾아서 그 안의 노드/관계를
   app.dtos.chat.GraphData 호환 {"nodes": [...], "edges": [...]}로 합침.
-  - node.type: Endpoint는 "api", Commit은 "commit"(evidence_fusion.py가
-    이 값을 보고 Evidence.type을 "commit"으로 매핑함), 그 외
-    (Method/MethodVersion/Class/Interface)는 "symbol"
+  - node.type: Endpoint는 "api", Commit은 "commit", MethodVersion은
+    "method_version", Method는 "method", Interface는 "interface", Class는
+    "class"(그 외는 방어적으로 "symbol"). **2026-08-24 변경**: 전에는
+    Method/MethodVersion/Class/Interface가 전부 "symbol" 하나로 뭉뚱그려져
+    있었는데, FE 그래프 시각화(코드 실행 흐름)에서 노드 종류를 전혀 구분할
+    수 없다는 문제가 있어서 세분화함. **⚠️ 이 값 자체가 늘어난 것만으로는
+    FE에 반영 안 됨** — app/adapters/qa_response_adapter.py의
+    `_GRAPH_NODE_TYPES` 화이트리스트와 app/dtos/chat.py의
+    `GraphNode.type` Literal도 같이 넓혀야 실제로 API 응답까지 새 타입이
+    나감(둘 다 같이 수정함, 아래 참고). evidence_fusion.py가 "commit"
+    타입만 보고 Evidence.type을 매핑하므로 그 로직은 안 건드림.
   - node.label / node.detail: Method/MethodVersion/Endpoint/Commit 각각
     보기 좋은 값으로 뽑음(아래 _node_label/_node_detail 참고) — changed_by_history가
     이제 실제로 Commit 노드를 돌려주기 시작해서(예전엔 CHANGED_BY가 아예
-    없어서 이 경로를 탈 일이 없었음) 추가함.
+    없어서 이 경로를 탈 일이 없었음) 추가함. **2026-08-24 변경**: MethodVersion
+    라벨이 "코드 버전 (L25-178)"처럼 무슨 메서드인지 전혀 안 드러나던 문제,
+    Method 라벨이 합성 module 클래스 내부 이름("server$module.createClient()")을
+    그대로 노출하던 문제 둘 다 수정함(아래 _node_label 참고).
   - node.id: Neo4j의 key 속성 그대로 사용
   - key(node)/(source,type,target) 기준으로 중복 노드·엣지 제거
 """
@@ -157,25 +168,77 @@ def _looks_like_path(value) -> bool:
 
 
 def _node_type(node) -> str:
-    if "Endpoint" in node.labels:
+    """FE 배지/아이콘 분기용 노드 종류. 2026-08-24: "symbol" 하나로 뭉치던
+    걸 세분화함 — 화면에서 Method/MethodVersion/Class/Interface가 전부 같은
+    "SYMBOL" 배지로 나와서 서로 구분이 안 되는 문제가 있었음. 이 값을
+    바꾸면 app/adapters/qa_response_adapter.py의 _GRAPH_NODE_TYPES /
+    app/dtos/chat.py의 GraphNode.type Literal도 같이 넓혀야 실제 API
+    응답에 반영됨(같이 수정함).
+    """
+    labels = node.labels
+    if "Endpoint" in labels:
         return "api"
-    if "Commit" in node.labels:
+    if "Commit" in labels:
         return "commit"
+    if "MethodVersion" in labels:
+        return "method_version"
+    if "Method" in labels:
+        return "method"
+    if "Interface" in labels:
+        return "interface"
+    if "Class" in labels:
+        return "class"
     return "symbol"
 
 
-def _node_label(node) -> str:
+def _display_class_name(class_name: str | None) -> str | None:
+    """클래스 이름에서 합성 module 클래스 접미어("$module")를 벗겨냄.
+
+    JS/Python/TS 파서가 클래스 밖 최상위 함수를 그래프 스키마에 맞추려고
+    파일당 "{파일이름}$module"이라는 내부 전용 이름을 붙이는데(app/parsers/
+    languages/{javascript,python,typescript}.py), 이게 그대로 화면에 노출되면
+    "server$module.createClient()"처럼 사용자한테 의미 없는 내부 구현
+    디테일이 새어나감. 접미어만 떼면 "server.createClient()"가 돼서 어느
+    파일 소속인지는 여전히 구분되면서 내부 네이밍은 안 드러남.
+    """
+    if not class_name:
+        return None
+    stripped = class_name.removesuffix("$module")
+    return stripped or None
+
+
+def _node_label(node, method_version_owner: dict | None = None) -> str:
+    """method_version_owner: MethodVersion.key -> {"name", "class_name"}.
+
+    MethodVersion 노드 자체엔 메서드 이름이 없고(부모 Method 노드에만 있음),
+    2026-08-24 전에는 그래서 "코드 버전 (L25-178)"처럼 무슨 메서드의 버전인지
+    전혀 안 드러났음. calls_forward/calls_backward/changed_by_history가
+    반환하는 경로엔 HAS_VERSION(Method->MethodVersion) 관계가 이미 포함돼
+    있으므로, _path_to_graph_dict가 그 관계들을 먼저 훑어서 이 매핑을 만들어
+    넘겨주면(없으면 예전처럼 라인 번호만 나오는 것으로 안전하게 폴백) 여기서
+    "createClient() (L25-178)"처럼 실제 이름을 붙일 수 있음.
+    """
     labels = node.labels
     if "Endpoint" in labels:
         return f"{node.get('http_method', '')} {node.get('path', '')}".strip()
     if "Method" in labels:
-        class_name = node.get("class_name")
+        display_class = _display_class_name(node.get("class_name"))
         name = node.get("name", "")
-        return f"{class_name}.{name}" if class_name else name
+        return f"{display_class}.{name}" if display_class else name
     if "MethodVersion" in labels:
         start_line = node.get("startLine")
         end_line = node.get("endLine")
-        return f"코드 버전 (L{start_line}-{end_line})" if start_line is not None else "코드 버전"
+        line_range = f"L{start_line}-{end_line}" if start_line is not None else None
+
+        owner = (method_version_owner or {}).get(node.get("key"))
+        if owner:
+            display_class = _display_class_name(owner.get("class_name"))
+            owner_name = owner.get("name") or ""
+            qualified = f"{display_class}.{owner_name}" if display_class else owner_name
+            if qualified:
+                return f"{qualified}() ({line_range})" if line_range else f"{qualified}()"
+
+        return f"코드 버전 ({line_range})" if line_range else "코드 버전"
     if "Commit" in labels:
         sha = node.get("sha", "")
         return sha[:8] if sha else node.get("key", "")
@@ -220,11 +283,13 @@ def _node_metadata(node) -> dict:
     return {}
 
 
-def _to_graph_node(node, *, include_history_metadata: bool) -> dict:
+def _to_graph_node(
+    node, *, include_history_metadata: bool, method_version_owner: dict | None = None
+) -> dict:
     return {
         "id": node.get("key"),
         "type": _node_type(node),
-        "label": _node_label(node),
+        "label": _node_label(node, method_version_owner),
         "detail": _node_detail(node),
         "metadata": _node_metadata(node) if include_history_metadata else {},
     }
@@ -246,12 +311,41 @@ def _to_graph_edge(relationship) -> dict:
     return edge
 
 
+def _collect_method_version_owners(records: list) -> dict:
+    """모든 경로의 HAS_VERSION(Method->MethodVersion) 관계를 먼저 훑어서
+    "이 MethodVersion이 누구의 버전인지"(이름 + 클래스) 매핑을 만든다.
+
+    _node_label이 MethodVersion 라벨을 만들 때 참고함. calls_forward/
+    calls_backward가 [:CALLS|HAS_VERSION*] 경로를 통째로 반환하기 때문에,
+    반환된 MethodVersion의 부모 Method는 보통 같은 경로 안에 이미 있음 —
+    별도 쿼리 없이 이미 받은 데이터에서 조립 가능.
+    """
+    owners: dict[str, dict] = {}
+    for record in records:
+        for value in record.values():
+            if value is None or not _looks_like_path(value):
+                continue
+            for relationship in value.relationships:
+                if relationship.type != "HAS_VERSION":
+                    continue
+                version_key = relationship.end_node.get("key")
+                if not version_key or version_key in owners:
+                    continue
+                method_node = relationship.start_node
+                owners[version_key] = {
+                    "name": method_node.get("name", ""),
+                    "class_name": method_node.get("class_name"),
+                }
+    return owners
+
+
 def _path_to_graph_dict(
     records: list, *, include_history_metadata: bool = False
 ) -> dict:
     """Neo4j 쿼리 결과 레코드 리스트를 GraphData 호환 {"nodes", "edges"} dict로 변환."""
     nodes_by_id: dict[str, dict] = {}
     edges_by_key: dict[tuple, dict] = {}
+    method_version_owner = _collect_method_version_owners(records)
 
     for record in records:
         for value in record.values():
@@ -263,6 +357,7 @@ def _path_to_graph_dict(
                     nodes_by_id[key] = _to_graph_node(
                         node,
                         include_history_metadata=include_history_metadata,
+                        method_version_owner=method_version_owner,
                     )
             for relationship in value.relationships:
                 edge_key = (

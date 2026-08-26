@@ -712,6 +712,95 @@ JavaScript 파서 + 공통 스캐폴딩을 추가함. **⚠️ 커밋/푸시는 
 
 ---
 
+## 0-12. "코드 실행 흐름" 그래프 라벨/타입 개선 (2026-08-24)
+
+FE에서 실제 질문을 던져보고 나온 "코드 실행 흐름" 시각화가 알아보기 어렵다는
+피드백을 받아서(노드 배지가 전부 "SYMBOL"로 뭉쳐 있고, 노드 하나는
+"코드 버전 (L25-178)"처럼 라인 번호만 보여줘서 무슨 메서드인지 안 보이고,
+다른 노드는 "server$module.createClient()"처럼 파서 내부 네이밍이 그대로
+노출됨) 원인을 추적해서 고침. **⚠️ 커밋/푸시는 안 했음, 파일만 씀 — 아래
+세 파일 모두 리뷰 필요.**
+
+**원인 (정확히 특정함)**: `app/graph/queries/traversal.py`의
+`_node_type()`/`_node_label()`이 진짜 원인이었음 —
+- `_node_type()`이 Method/MethodVersion/Class/Interface를 전부 "symbol"
+  하나로 뭉쳐서 반환 → FE가 전부 같은 "SYMBOL" 배지로 그림.
+- `_node_label()`의 MethodVersion 케이스가 자기 자신의 속성(startLine/
+  endLine)만 보고 라벨을 만듦 — 정작 "누구의" 버전인지(메서드 이름)는
+  부모 Method 노드에만 있어서 안 나옴.
+- `_node_label()`의 Method 케이스가 `class_name` 속성을 그대로 써서,
+  최상위 함수를 감싸는 합성 클래스 이름("{파일이름}$module" — JS/Python/TS
+  파서가 붙이는 내부 전용 이름, app/parsers/languages/*.py 참고)이 그대로
+  노출됨(예: "server$module.createClient()").
+
+이 라벨/타입이 실제로 FE까지 어떻게 도달하는지도 코드로 추적함:
+`traversal.py` → (CALL_FLOW 질문이면) `app/adapters/response_input_adapter.py`의
+`_normalize_node()`가 `label`→`name`으로, `type`을 대문자로 바꿔서
+`app/visualization/call_flow_builder.py`에 넘김 → `CallFlowBuilder`가
+이름 끝에 ")"가 없으면 "()"를 붙여서 `GraphResponse` 생성 → 이게(또는
+CALL_FLOW가 아닌 질문이면 `state["graph_results"]`가 그대로) 최종적으로
+`app/adapters/qa_response_adapter.py`의 `_graph_node_from()`을 거쳐 FE
+응답(`app/dtos/chat.py`의 `GraphData`)으로 나감.
+
+**수정한 파일:**
+- `app/graph/queries/traversal.py` (내 파일, 안전하게 수정 가능)
+  - `_node_type()`: "symbol" 하나로 뭉치던 걸 `"method"`/`"method_version"`/
+    `"class"`/`"interface"`/`"api"`/`"commit"`로 세분화(그 외는 방어적으로
+    `"symbol"` 유지).
+  - `_display_class_name()` 신규: 클래스 이름에서 `$module` 접미어만 벗겨냄
+    ("server$module" → "server"). Method 라벨에 적용해서
+    "server.createClient()" / "client.createClient()"처럼 파일별로
+    구분되면서도 내부 네이밍은 안 새어나가게 함.
+  - `_collect_method_version_owners()` 신규 + `_node_label()`/`_to_graph_node()`/
+    `_path_to_graph_dict()` 수정: calls_forward/calls_backward가 반환하는
+    경로엔 HAS_VERSION(Method→MethodVersion) 관계가 이미 포함돼 있다는 점을
+    이용해서, MethodVersion 라벨을 만들 때 그 관계에서 부모 Method의
+    이름을 끌어와 붙임 — "코드 버전 (L25-178)" → "createClient() (L25-178)".
+    부모 Method가 같은 경로 안에 없으면(예: changed_by_history의 단독
+    MethodVersion) 예전처럼 라인 번호만 나오는 것으로 안전하게 폴백함(회귀
+    테스트로 확인).
+- `app/adapters/qa_response_adapter.py` (⚠️ 팀원 파일, 리뷰 필요) —
+  `_GRAPH_NODE_TYPES` 화이트리스트에 `"method"`/`"method_version"`/
+  `"class"`/`"interface"` 추가. **이거 안 하면 traversal.py를 아무리
+  고쳐도 여기서 전부 "symbol"로 도로 뭉개져서 FE까지 하나도 안 감** —
+  실제로 로컬에서 재현해보고 확인한 문제임.
+- `app/dtos/chat.py` (⚠️ 팀원 파일, 리뷰 필요) — `GraphNode.type`의
+  `Literal`에 같은 4개 값 추가(타입 힌트 정합성 — 런타임 강제는 안
+  되지만 계약 문서로서 부정확해지는 걸 방지).
+- `tests/test_graph_traversal.py` — 기존 테스트 1개(`MethodVersion` type
+  기대값이 "symbol"이던 것)를 "method_version"으로 수정 + 신규 4개
+  (타입 세분화, `$module` 접미어 제거, HAS_VERSION 통한 이름 붙이기,
+  부모를 못 찾을 때의 폴백) 추가.
+
+**검증한 것:**
+- `traversal.py`/`qa_response_adapter.py`/`dtos/chat.py` 순수 로직은
+  로컬에서 직접 실행(fake Node/Path 객체로 실제 스크린샷 시나리오를
+  그대로 재현) — MethodVersion 노드가 "handleConnect() (L25-178)"로,
+  두 `createClient()`가 "server.createClient()"/"client.createClient()"로
+  구분되는 것 확인함.
+- `traversal.py` → `response_input_adapter.py` → `call_flow_builder.py` →
+  `qa_response_adapter.py`까지 전체 체인을 로컬에서 이어붙여서 최종
+  `GraphNode(type="method_version", label="handleConnect() (L25-178)")`
+  형태로 끝까지 정상 도달하는 것까지 확인함(라벨/타입 둘 다 FE 응답
+  직전까지 안 깨짐).
+- 관련 기존 테스트 전부(`test_graph_traversal.py`, `test_qa_response_adapter.py`,
+  `test_visualization_builder.py`, `test_response_generation_dtos.py`,
+  나머지 파서/그래프 테스트 포함 총 51개) 로컬에서 통과 확인 — 회귀 없음.
+
+**아직 안 한 것 / 팀 논의 필요:**
+- FE가 새로 늘어난 `type` 값("method"/"method_version"/"class"/"interface")을
+  실제로 다른 배지/아이콘으로 그리게 바꾸는 건 프론트 담당자 작업 — 지금은
+  값만 세분화된 상태고, FE가 몰라도 최소한 깨지진 않음(기존에 없던 값이
+  추가된 것뿐이라 기존 렌더링 로직이 default 처리만 잘 해두면 안전).
+- Method/MethodVersion이 그래프 내부 모델링(CALLS가 버전에서 출발) 때문에
+  화면에 별개 노드로 노출되는 구조적인 문제는 이번엔 안 건드림(라벨/타입만
+  고침) — 필요하면 팀 논의해서 화면상 하나로 합칠지 결정할 것.
+- 실 데이터(Neo4j 붙여서)로는 아직 검증 안 함 — 로컬 fake 객체 재현으로만
+  확인한 상태, FE에서 실제 질문 다시 던져서 스크린샷과 비교해보는 게 최종
+  확인.
+
+---
+
 ## 1. 지금 코드 상태 (이미 되어 있는 것 / 안 되어 있는 것)
 
 - **Phase 1(배관) 완료**: `app/ai/rag/state.py`(QAState 스키마), `app/ai/rag/pipeline.py`(`build_graph()`, `run_qa_pipeline()`) 둘 다 실제로 짜여 있고, `scripts/check_pipeline_skeleton.py`로 그래프 흐름(병렬 분기 → join → 조건부 재시도 루프)이 정상 동작함을 이미 검증함. **이 두 파일은 건드릴 필요 없음** — 그대로 재사용.
