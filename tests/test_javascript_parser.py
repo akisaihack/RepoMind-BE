@@ -92,6 +92,23 @@ def test_arrow_function_assigned_to_const_is_treated_as_top_level_function():
     assert module_class.layer == "Util"  # utils/ 경로 키워드로 분류됨
 
 
+def test_named_function_inside_iife_is_treated_as_module_function() -> None:
+    src = b"""\
+    (function () {
+        function requestExport(spinKey) {
+            return spinKey;
+        }
+    })();
+    """
+
+    result = parse_javascript_file("static/embed.js", src)
+    module_class = next(c for c in result.classes if c.name == "embed$module")
+    request_export = next(m for m in module_class.methods if m.name == "requestExport")
+
+    assert request_export.param_signature == "(spinKey)"
+    assert "return spinKey" in request_export.text
+
+
 def test_extracts_static_fetch_and_axios_calls() -> None:
     src = b'''\
     export async function checkUsername(value) {
