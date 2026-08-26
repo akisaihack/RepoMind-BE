@@ -152,13 +152,14 @@ class GitHubGraphMapper:
                     {"githubId": pull_request.author_id, "toKey": key, "properties": {}}
                 )
 
-            for sha in pull_request.commit_shas:
+            related_commit_shas = set(pull_request.commit_shas)
+            if pull_request.merge_commit_sha:
+                related_commit_shas.add(pull_request.merge_commit_sha)
+            for sha in sorted(related_commit_shas):
                 pull_request_commits.append(
                     {"fromKey": key, "toKey": ensure_commit(sha), "properties": {}}
                 )
             ensure_commit(pull_request.head_sha)
-            if pull_request.merge_commit_sha:
-                ensure_commit(pull_request.merge_commit_sha)
 
             for file in pull_request.files:
                 file_key = ensure_file(file.filename)

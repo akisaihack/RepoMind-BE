@@ -190,6 +190,54 @@ def test_deduplicates_vector_and_history_version_by_stable_id() -> None:
     assert result[0]["title"] == "AuthController.authenticateUser()"
 
 
+def test_exposes_pull_request_and_issue_as_intent_evidence() -> None:
+    state = {
+        "question": "왜 중복 투표 검증을 추가했어?",
+        "github_repository_id": 1,
+        "question_kind": "intent",
+        "vector_results": [],
+        "graph_results": {
+            "nodes": [
+                {
+                    "id": "pr:42",
+                    "metadata": {
+                        "node_type": "PullRequest",
+                        "number": 42,
+                        "title": "중복 투표 방지",
+                        "body": "동일 사용자의 두 번째 투표를 거부합니다.",
+                        "state": "closed",
+                        "url": "https://github.com/org/repo/pull/42",
+                    },
+                },
+                {
+                    "id": "issue:35",
+                    "metadata": {
+                        "node_type": "Issue",
+                        "number": 35,
+                        "title": "중복 투표 허용 문제",
+                        "body": "한 사용자가 여러 번 투표할 수 있습니다.",
+                        "state": "closed",
+                        "url": "https://github.com/org/repo/issues/35",
+                        "labels": ["bug"],
+                    },
+                },
+            ],
+            "edges": [
+                {"source": "pr:42", "target": "issue:35", "type": "REFERENCES"},
+                {"source": "pr:42", "target": "issue:35", "type": "RESOLVES"},
+            ],
+        },
+    }
+
+    result = fuse_evidence(state)["evidence"]
+
+    assert [item["type"] for item in result] == ["itsm", "itsm"]
+    assert result[0]["title"] == "Pull Request #42: 중복 투표 방지"
+    assert result[0]["excerpt"] == "동일 사용자의 두 번째 투표를 거부합니다."
+    assert result[1]["title"] == "Issue #35: 중복 투표 허용 문제"
+    assert result[1]["description"] == "해결한 이슈 · closed"
+
+
 def test_formats_single_source_line_without_a_range() -> None:
     assert _code_location("src/User.java", 93, 93) == "src/User.java · Line 93"
 

@@ -52,6 +52,40 @@ def _commit_node(node_id: str, sha: str, date: str, message: str) -> dict:
     }
 
 
+def _pull_request_node() -> dict:
+    return {
+        "id": "pr:42",
+        "type": "symbol",
+        "label": "#42 Prevent duplicate votes",
+        "metadata": {
+            "node_type": "PullRequest",
+            "number": 42,
+            "title": "Prevent duplicate votes",
+            "body": "Reject duplicate votes from the same user.",
+            "state": "closed",
+            "url": "https://github.com/org/repo/pull/42",
+            "merged": True,
+        },
+    }
+
+
+def _issue_node() -> dict:
+    return {
+        "id": "issue:35",
+        "type": "symbol",
+        "label": "#35 Duplicate votes",
+        "metadata": {
+            "node_type": "Issue",
+            "number": 35,
+            "title": "Duplicate votes",
+            "body": "A user can vote more than once.",
+            "state": "closed",
+            "url": "https://github.com/org/repo/issues/35",
+            "labels": ["bug"],
+        },
+    }
+
+
 def test_joins_versions_and_commits_chronologically_and_builds_diff() -> None:
     old_version = _version_node(
         "version:old",
@@ -126,3 +160,32 @@ def test_skips_incomplete_version_commit_relationship() -> None:
     )
 
     assert result == []
+
+
+def test_attaches_pull_request_and_resolved_issue_to_commit_change() -> None:
+    version = _version_node("version:1", "void run() {}", "hash", 10)
+    commit = _commit_node("commit:1", "abc123", "2026-08-01T10:00:00Z", "fix")
+    pull_request = _pull_request_node()
+    issue = _issue_node()
+    evidence = [
+        {"id": evidence_id("itsm", "pr:42")},
+        {"id": evidence_id("itsm", "issue:35")},
+    ]
+
+    result = HistoryContextBuilder().build(
+        [_method_node(), version, commit, pull_request, issue],
+        [
+            {"source": "method:authenticate", "target": "version:1", "type": "HAS_VERSION"},
+            {"source": "version:1", "target": "commit:1", "type": "INTRODUCED_IN"},
+            {"source": "pr:42", "target": "commit:1", "type": "CONTAINS_COMMIT"},
+            {"source": "pr:42", "target": "issue:35", "type": "REFERENCES"},
+            {"source": "pr:42", "target": "issue:35", "type": "RESOLVES"},
+        ],
+        evidence,
+    )
+
+    assert result[0].pull_requests[0].number == 42
+    assert result[0].pull_requests[0].evidence_id == evidence_id("itsm", "pr:42")
+    assert result[0].issues[0].number == 35
+    assert result[0].issues[0].relation == "RESOLVES"
+    assert result[0].issues[0].evidence_id == evidence_id("itsm", "issue:35")

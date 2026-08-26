@@ -76,7 +76,9 @@ import re
 from app.clients.neo4j import Neo4jClient
 from app.dtos.history_retrieval import (
     CommitHistoryMetadata,
+    IssueHistoryMetadata,
     MethodVersionHistoryMetadata,
+    PullRequestHistoryMetadata,
 )
 
 DEFAULT_CALLS_DEPTH = 5
@@ -157,9 +159,16 @@ def changed_by_history(client: Neo4jClient, start_node_id: str) -> dict:
     """
     query = """
     MATCH (start:Method {key: $start_node_id})
-    OPTIONAL MATCH history = (start)-[:HAS_VERSION]->(:MethodVersion)-[:INTRODUCED_IN]->(:Commit)
-    OPTIONAL MATCH deletion = (start)-[:DELETED_IN]->(:Commit)
-    RETURN history, deletion
+    OPTIONAL MATCH history =
+      (start)-[:HAS_VERSION]->(:MethodVersion)-[:INTRODUCED_IN]->(history_commit:Commit)
+    OPTIONAL MATCH pull_request =
+      (history_pr:PullRequest)-[:CONTAINS_COMMIT]->(history_commit)
+    OPTIONAL MATCH issue = (history_pr)-[:RESOLVES|REFERENCES]->(:Issue)
+    OPTIONAL MATCH deletion = (start)-[:DELETED_IN]->(deletion_commit:Commit)
+    OPTIONAL MATCH deletion_pull_request =
+      (deletion_pr:PullRequest)-[:CONTAINS_COMMIT]->(deletion_commit)
+    OPTIONAL MATCH deletion_issue = (deletion_pr)-[:RESOLVES|REFERENCES]->(:Issue)
+    RETURN history, pull_request, issue, deletion, deletion_pull_request, deletion_issue
     """
     result = client.execute_query(query, {"start_node_id": start_node_id})
     return _path_to_graph_dict(
@@ -265,6 +274,10 @@ def _node_label(node, method_version_owner: dict | None = None) -> str:
         # (전체 경로는 _node_detail에 남겨서 필요하면 볼 수 있게 함).
         path = node.get("path", "")
         return path.rsplit("/", 1)[-1] if path else node.get("key", "")
+    if "PullRequest" in labels:
+        return f"#{node.get('number', '')} {node.get('title', '')}".strip()
+    if "Issue" in labels:
+        return f"#{node.get('number', '')} {node.get('title', '')}".strip()
     return node.get("name") or node.get("key", "")
 
 
@@ -280,6 +293,8 @@ def _node_detail(node) -> str | None:
         return node.get("sha")
     if "File" in labels:
         return node.get("path")
+    if "PullRequest" in labels or "Issue" in labels:
+        return node.get("url")
     return None
 
 
@@ -304,6 +319,25 @@ def _node_metadata(node) -> dict:
             authored_at=node.get("authoredAt"),
             committed_at=node.get("committedAt"),
             url=node.get("url"),
+        ).model_dump(exclude_none=True)
+    if "PullRequest" in labels:
+        return PullRequestHistoryMetadata(
+            number=node.get("number", 0),
+            title=node.get("title", ""),
+            body=node.get("body"),
+            state=node.get("state"),
+            url=node.get("url"),
+            merged=node.get("merged"),
+            merged_at=node.get("mergedAt"),
+        ).model_dump(exclude_none=True)
+    if "Issue" in labels:
+        return IssueHistoryMetadata(
+            number=node.get("number", 0),
+            title=node.get("title", ""),
+            body=node.get("body"),
+            state=node.get("state"),
+            url=node.get("url"),
+            labels=list(node.get("labels") or []),
         ).model_dump(exclude_none=True)
     return {}
 

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MethodVersionHistoryMetadata(BaseModel):
@@ -34,4 +34,38 @@ class CommitHistoryMetadata(BaseModel):
     url: str | None = None
 
 
-__all__ = ["CommitHistoryMetadata", "MethodVersionHistoryMetadata"]
+class PullRequestHistoryMetadata(BaseModel):
+    """Commit을 포함하는 GitHub Pull Request 정보."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_type: Literal["PullRequest"] = "PullRequest"
+    number: int
+    title: str
+    body: str | None = None
+    state: str | None = None
+    url: str | None = None
+    merged: bool | None = None
+    merged_at: str | None = None
+
+
+class IssueHistoryMetadata(BaseModel):
+    """Pull Request가 해결하거나 참조하는 GitHub Issue 정보."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_type: Literal["Issue"] = "Issue"
+    number: int
+    title: str
+    body: str | None = None
+    state: str | None = None
+    url: str | None = None
+    labels: list[str] = Field(default_factory=list)
+
+
+__all__ = [
+    "CommitHistoryMetadata",
+    "IssueHistoryMetadata",
+    "MethodVersionHistoryMetadata",
+    "PullRequestHistoryMetadata",
+]
