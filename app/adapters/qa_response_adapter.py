@@ -16,6 +16,7 @@ from app.dtos.chat import (
     GraphEdge,
     GraphNode,
 )
+from app.dtos.question import QuestionKind
 from app.dtos.response_generation import QueryIntent, QueryResponse
 
 _CLAIM_TITLE_BY_INTENT = {
@@ -35,6 +36,12 @@ _SUGGESTED_QUESTIONS_BY_INTENT = {
 _GRAPH_NODE_TYPES = {"api", "symbol", "commit"}
 _EVIDENCE_TYPES = {"code", "itsm", "commit"}
 _FLOW_EDGE_TYPES = {"calls", "http_calls", "handled_by"}
+_QUESTION_KIND_BY_INTENT = {
+    QueryIntent.FLOW: QuestionKind.FLOW,
+    QueryIntent.DEPENDENCY: QuestionKind.IMPACT,
+    QueryIntent.HISTORY: QuestionKind.INTENT,
+    QueryIntent.EXPLANATION: QuestionKind.LOCATION,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +68,7 @@ class QAResponseAdapter:
         )
 
         return ChatResponseData(
+            questionKind=_question_kind_from(state, query_response).value,
             summary=query_response.answer,
             claims=claims,
             evidence=evidence,
@@ -69,6 +77,14 @@ class QAResponseAdapter:
             uncertainties=uncertainties,
             suggestedQuestions=_SUGGESTED_QUESTIONS_BY_INTENT[query_response.intent],
         )
+
+
+def _question_kind_from(state: QAState, response: QueryResponse) -> QuestionKind:
+    """Expose the analyzer result, with compatibility for older pipeline states."""
+    question_kind = state.get("question_kind")
+    if question_kind is not None:
+        return QuestionKind(question_kind)
+    return _QUESTION_KIND_BY_INTENT[response.intent]
 
 
 def _claims_from(query_response: QueryResponse, evidence: list[Evidence]) -> list[Claim]:

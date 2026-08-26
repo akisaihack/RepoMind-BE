@@ -47,6 +47,7 @@ def get_mock_chat_response() -> ChatResponseData:
     ]
     
     return ChatResponseData(
+        questionKind="flow",
         summary="요청은 MemberController에서 시작해 MemberService의 유스케이스와 MemberPolicy 검증을 거칩니다.",
         claims=mock_claims,
         evidence=mock_evidence,

@@ -26,6 +26,7 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
     state = {
         "question": "취소 요청 흐름을 알려줘",
         "github_repository_id": 1,
+        "question_kind": "flow",
         "is_sufficient": True,
         "evidence": [
             {
@@ -57,6 +58,7 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
 
     result = QAResponseAdapter().adapt(state, response)
 
+    assert result.questionKind == "flow"
     assert result.summary == response.answer
     assert result.claims[0].kind == "fact"
     assert result.claims[0].evidenceIds == ["method:1", "method:2"]
@@ -67,6 +69,7 @@ def test_adapts_grounded_rag_response_with_visualization() -> None:
     assert result.suggestedQuestions == ["이 흐름을 수정하면 영향 범위가 어떻게 돼?"]
 
     serialized = asdict(result)
+    assert serialized["questionKind"] == "flow"
     assert serialized["claims"][0]["evidenceIds"] == ["method:1", "method:2"]
     assert serialized["evidence"][0]["excerptStartLine"] == 31
     assert serialized["evidence"][0]["fullExcerpt"].startswith("def cancel")
