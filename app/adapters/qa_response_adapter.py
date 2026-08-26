@@ -33,7 +33,26 @@ _SUGGESTED_QUESTIONS_BY_INTENT = {
     QueryIntent.EXPLANATION: ["이 코드가 호출되는 흐름을 알려줘."],
 }
 
-_GRAPH_NODE_TYPES = {"api", "symbol", "commit"}
+_GRAPH_NODE_TYPES = {
+    "api",
+    "symbol",
+    "commit",
+    # 2026-08-24 추가: app/graph/queries/traversal.py의 _node_type()이
+    # Method/MethodVersion/Class/Interface를 "symbol" 하나로 뭉치던 걸
+    # 세분화함 — 여기서도 화이트리스트를 같이 넓혀야 새 타입이 화이트리스트에
+    # 안 걸려서 "symbol"로 도로 뭉개지는 일이 없음(app/dtos/chat.py의
+    # GraphNode.type Literal도 같이 넓혔음).
+    "method",
+    "method_version",
+    "class",
+    "interface",
+    # 2026-08-24 추가 (같은 날 두 번째 라운드): File/Package도 세분화 —
+    # 전에는 File 노드가 "symbol"로 뭉개지면서 라벨도 못 찾아서 내부
+    # 그래프 key가 그대로 노출되는 별도 버그가 있었음(shallow_neighborhood로
+    # "location" 질문에 답할 때 실제로 재현됨).
+    "file",
+    "package",
+}
 _EVIDENCE_TYPES = {"code", "itsm", "commit"}
 _FLOW_EDGE_TYPES = {"calls", "http_calls", "handled_by"}
 _QUESTION_KIND_BY_INTENT = {
